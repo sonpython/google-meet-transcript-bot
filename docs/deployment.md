@@ -24,6 +24,14 @@ Cloudflare Tunnel should route:
 meet-assistant.sonpython.com -> http://localhost:18080
 ```
 
+Tunnel runtime on the Docker host:
+
+```text
+meeting-assistant-cloudflared
+```
+
+Run it with a Cloudflare tunnel token and host networking so it can reach `localhost:18080` on the host. Do not commit the token.
+
 ## Deploy Command
 
 From the repository root:
@@ -43,7 +51,7 @@ Deployed container:
 meeting-assistant -> 127.0.0.1:18080:8080
 ```
 
-The service can start in degraded mode while secrets are missing. `/status` reports missing runtime inputs.
+The service can start in degraded mode while secrets are missing. `/status` reports missing runtime inputs. As of the first Docker host deploy, Gemini, Telegram, and generated passphrases were populated from local Claude memory/env; the remaining required input is the real Google OAuth client secret JSON.
 
 ## Required Host Files
 
