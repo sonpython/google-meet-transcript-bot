@@ -23,3 +23,42 @@ def test_terminal_meeting_is_not_scheduled_again(tmp_path) -> None:
     runner.schedule_bot_join(meeting)
 
     assert not runner.scheduler.get_jobs()
+
+
+def test_recently_missed_pending_meeting_is_resumed(tmp_path) -> None:
+    repo = MeetingsRepo(connect(tmp_path / "state.db"))
+    meeting = MeetingEvent(
+        meet_code="abc-defg-hij",
+        event_id="event-1",
+        start_utc=datetime.now(UTC) - timedelta(minutes=5),
+        title="Recent",
+        organizer=None,
+        attendees=(),
+    )
+    repo.upsert(meeting)
+    runner = JobRunner(repo, lambda event: None)
+
+    runner.resume_pending()
+
+    assert repo.get(meeting.meet_code)["status"] == "scheduled"
+    assert runner.scheduler.get_jobs()
+
+
+def test_old_missed_pending_meeting_is_failed(tmp_path) -> None:
+    repo = MeetingsRepo(connect(tmp_path / "state.db"))
+    meeting = MeetingEvent(
+        meet_code="abc-defg-hij",
+        event_id="event-1",
+        start_utc=datetime.now(UTC) - timedelta(minutes=45),
+        title="Old",
+        organizer=None,
+        attendees=(),
+    )
+    repo.upsert(meeting)
+    runner = JobRunner(repo, lambda event: None)
+
+    runner.resume_pending()
+
+    row = repo.get(meeting.meet_code)
+    assert row["status"] == "failed"
+    assert row["last_error"] == "missed scheduled start during downtime"

@@ -6,6 +6,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.models.meeting_event import MeetingEvent
 from src.state.meetings_repo import MeetingsRepo
 
+LATE_START_GRACE = timedelta(minutes=30)
+
 
 class JobRunner:
     def __init__(self, repo: MeetingsRepo, run_meeting) -> None:
@@ -46,9 +48,10 @@ class JobRunner:
         )
 
     def resume_pending(self) -> None:
+        now = datetime.now(UTC)
         for row in self.repo.get_pending():
             meeting = _row_to_meeting_event(row)
-            if meeting.start_utc < datetime.now(UTC):
+            if meeting.start_utc < now - LATE_START_GRACE:
                 self.repo.mark_status(meeting.meet_code, "failed", "missed scheduled start during downtime")
                 continue
             self.schedule_bot_join(meeting)
