@@ -22,12 +22,16 @@ class FakeChunker:
 class FakeGeminiClient:
     def __init__(self) -> None:
         self.audio_calls: list[tuple[Path, str]] = []
+        self.text_calls: list[str] = []
 
     async def generate_from_audio(self, audio_path: Path, prompt: str) -> str:
         self.audio_calls.append((audio_path, prompt))
         return f"Transcript for {audio_path.name}"
 
     async def generate_text(self, prompt: str) -> str:
+        self.text_calls.append(prompt)
+        if "Meeting Minutes" in prompt:
+            return "## Thông Tin Cuộc Họp\nMinutes content"
         return "## TL;DR\nSummary content"
 
 
@@ -73,10 +77,13 @@ def test_pipeline_writes_outputs(tmp_path: Path) -> None:
         title="Weekly Sync",
     )
 
-    transcript_path, summary_path, notes_path = asyncio.run(pipeline.process(result))
+    transcript_path, summary_path, minutes_path, notes_path = asyncio.run(pipeline.process(result))
 
     assert transcript_path.exists()
     assert "## Segment " in summary_path.read_text()
     assert "## TL;DR\nSummary content" in summary_path.read_text()
+    assert "## Thông Tin Cuộc Họp\nMinutes content" in minutes_path.read_text()
+    assert len(client.text_calls) == 2
     assert "# Weekly Sync" in notes_path.read_text()
+    assert "## Meeting Minutes" in notes_path.read_text()
     assert "- Meet code: abc-defg-hij" in notes_path.read_text()

@@ -12,7 +12,7 @@ class GeminiPipeline:
         self.summarizer = Summarizer(client)
         self.output_dir = output_dir
 
-    async def process(self, result: MeetingResult) -> tuple[Path, Path, Path]:
+    async def process(self, result: MeetingResult) -> tuple[Path, Path, Path, Path]:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         transcript = await self.transcriber.transcribe(
             result.audio_path,
@@ -20,20 +20,23 @@ class GeminiPipeline:
             result.title,
         )
         summary = await self.summarizer.summarize(transcript, result.title)
+        minutes = await self.summarizer.minutes(transcript, result.title)
         slug = _slug(result.title or result.meet_code)
         transcript_path = self.output_dir / f"transcript-{slug}.md"
         summary_path = self.output_dir / f"summary-{slug}.md"
+        minutes_path = self.output_dir / f"meeting-minutes-{slug}.md"
         notes_path = self.output_dir / f"meeting-notes-{slug}.md"
         marker = _segment_marker(result)
         _append_segment(transcript_path, marker, transcript)
         _append_segment(summary_path, marker, summary)
+        _append_segment(minutes_path, marker, minutes, header=f"# Meeting Minutes - {result.title or result.meet_code}")
         _append_segment(
             notes_path,
             marker,
-            f"## Summary\n\n{summary}\n\n## Transcript\n\n{transcript}",
+            f"## Summary\n\n{summary}\n\n## Meeting Minutes\n\n{minutes}\n\n## Transcript\n\n{transcript}",
             header=f"# {result.title or result.meet_code}",
         )
-        return transcript_path, summary_path, notes_path
+        return transcript_path, summary_path, minutes_path, notes_path
 
 
 def _slug(value: str) -> str:

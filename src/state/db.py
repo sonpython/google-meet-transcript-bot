@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS meetings (
     status TEXT NOT NULL,
     transcript_path TEXT,
     summary_path TEXT,
+    minutes_path TEXT,
     notes_path TEXT,
     audio_path TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
@@ -45,4 +46,12 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _ensure_column(conn, "meetings", "minutes_path", "TEXT")
     return conn
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        conn.commit()

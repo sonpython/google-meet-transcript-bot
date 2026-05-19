@@ -153,7 +153,7 @@ def _list_meetings() -> list[dict]:
         rows = conn.execute(
             """
             SELECT meet_code, event_id, scheduled_start_utc, title, status,
-                   transcript_path, summary_path, notes_path, audio_path,
+                   transcript_path, summary_path, minutes_path, notes_path, audio_path,
                    attempts, last_error, delivered_at, created_at, updated_at
             FROM meetings
             ORDER BY scheduled_start_utc DESC, updated_at DESC
@@ -214,6 +214,7 @@ def _meeting_paths(meeting: dict) -> dict[str, Path | None]:
         "audio": _path_or_none(meeting.get("audio_path")),
         "transcript": _path_or_none(meeting.get("transcript_path")),
         "summary": _path_or_none(meeting.get("summary_path")),
+        "minutes": _path_or_none(meeting.get("minutes_path")),
         "notes": _path_or_none(meeting.get("notes_path")),
     }
     notes = paths["notes"]
@@ -221,6 +222,7 @@ def _meeting_paths(meeting: dict) -> dict[str, Path | None]:
         slug = notes.name.removeprefix("meeting-notes-").removesuffix(".md")
         paths["transcript"] = paths["transcript"] or notes.with_name(f"transcript-{slug}.md")
         paths["summary"] = paths["summary"] or notes.with_name(f"summary-{slug}.md")
+        paths["minutes"] = paths["minutes"] or notes.with_name(f"meeting-minutes-{slug}.md")
     return paths
 
 
@@ -327,8 +329,8 @@ async function loadStatus(){const d=await api('status'); document.getElementById
 async function loadUpcoming(){const d=await api('upcoming'); const rows=d.events.map(e=>`<tr><td>${esc(e.title)}</td><td>${fmt(e.start?.dateTime||e.start?.date)}</td><td>${esc(e.meet_code||'')}</td><td>${e.qualifying?'yes':'no'}</td></tr>`).join(''); document.getElementById('upcoming').innerHTML=`<table><thead><tr><th>Title</th><th>Start</th><th>Meet</th><th>Tracked</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">No upcoming events.</td></tr>'}</tbody></table>`;}
 async function loadMeetings(){const d=await api('meetings'); document.getElementById('meetings').innerHTML=d.meetings.map(m=>`<div class="row" onclick="loadDetail('${esc(m.meet_code)}')"><strong>${esc(m.title)}</strong><div>${badge(m.status)} <span class="muted">${esc(m.meet_code)} · ${fmt(m.scheduled_start_utc)}</span></div></div>`).join('')||'<div class="row muted">No meetings.</div>';}
 async function loadDetail(code){const d=await api('meetings/'+encodeURIComponent(code)); const m=d.meeting; const files=m.files||{}; document.getElementById('detail').innerHTML=`<div class="detail-body"><h3>${esc(m.title)}</h3><p><button onclick="rejoin('${esc(m.meet_code)}')">Rejoin</button></p>
-${kv('Status',badge(m.status))}${kv('Meet code',esc(m.meet_code))}${kv('Event ID',esc(m.event_id))}${kv('Scheduled',fmt(m.scheduled_start_utc))}${kv('Delivered',fmt(m.delivered_at))}${kv('Audio',fileLine(files.audio))}${kv('Listen',audioPlayer(m))}${kv('Notes',fileLine(files.notes))}${kv('Transcript',fileLine(files.transcript))}${m.last_error?kv('Error',esc(m.last_error)):''}
-${codeBlock('Summary',files.summary?.content||'')}${codeBlock('Transcript',files.transcript?.content||'')}${codeBlock('Notes',files.notes?.content||'')}</div>`;}
+${kv('Status',badge(m.status))}${kv('Meet code',esc(m.meet_code))}${kv('Event ID',esc(m.event_id))}${kv('Scheduled',fmt(m.scheduled_start_utc))}${kv('Delivered',fmt(m.delivered_at))}${kv('Audio',fileLine(files.audio))}${kv('Listen',audioPlayer(m))}${kv('Notes',fileLine(files.notes))}${kv('Minutes',fileLine(files.minutes))}${kv('Transcript',fileLine(files.transcript))}${m.last_error?kv('Error',esc(m.last_error)):''}
+${codeBlock('Summary',files.summary?.content||'')}${codeBlock('Meeting Minutes',files.minutes?.content||'')}${codeBlock('Transcript',files.transcript?.content||'')}${codeBlock('Notes',files.notes?.content||'')}</div>`;}
 async function rejoin(code){const result=await api('meetings/'+encodeURIComponent(code)+'/rejoin',{method:'POST'}); if(result.error){alert(result.error); return;} alert('Rejoin queued'); await loadAll(); await loadDetail(code);}
 function kv(k,v){return `<div class="kv"><div class="muted">${k}</div><div>${v}</div></div>`}
 function fileLine(f){return f?.exists?`${esc(f.path)} <span class="muted">(${f.size} bytes)</span>`:'missing'}

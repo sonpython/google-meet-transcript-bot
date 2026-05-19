@@ -76,6 +76,13 @@ class MeetingSession:
 
 def _normalize_output_paths(output_paths) -> tuple[Path, dict[str, str]]:
     if isinstance(output_paths, tuple):
+        if len(output_paths) == 4:
+            transcript_path, summary_path, minutes_path, notes_path = output_paths
+            return notes_path, {
+                "transcript_path": str(transcript_path),
+                "summary_path": str(summary_path),
+                "minutes_path": str(minutes_path),
+            }
         transcript_path, summary_path, notes_path = output_paths
         return notes_path, {
             "transcript_path": str(transcript_path),

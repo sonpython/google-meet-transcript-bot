@@ -47,7 +47,7 @@ def _build_result_processor(settings):
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY is required for meeting processing")
         gemini = GeminiPipeline(GeminiClient(settings.gemini_api_key, settings.gemini_model), settings.output_dir)
-        transcript_path, summary_path, notes_path = await gemini.process(result)
+        transcript_path, summary_path, minutes_path, notes_path = await gemini.process(result)
         if settings.delivery_enabled and settings.discord_bot_token and settings.discord_channel_id:
             discord = DiscordDelivery(DiscordClient(settings.discord_bot_token, settings.discord_channel_id))
             summary = summary_path.read_text()
@@ -56,7 +56,7 @@ def _build_result_processor(settings):
             telegram = TelegramDelivery(TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id))
             summary = summary_path.read_text()
             await telegram.deliver(result, notes_path, summary)
-        return transcript_path, summary_path, notes_path
+        return transcript_path, summary_path, minutes_path, notes_path
 
     return process
 
