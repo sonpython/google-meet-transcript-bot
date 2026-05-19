@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import os
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
@@ -32,6 +33,7 @@ class BrowserSessionFactory:
         browser = await playwright.chromium.launch(
             headless=self.headless,
             args=["--disable-blink-features=AutomationControlled", "--use-fake-ui-for-media-stream"],
+            env=os.environ.copy(),
         )
         state = self.state_store.load()
         context = await browser.new_context(

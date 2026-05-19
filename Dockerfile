@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg pulseaudio-utils \
+    && apt-get install -y --no-install-recommends ffmpeg pulseaudio pulseaudio-utils xauth xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./

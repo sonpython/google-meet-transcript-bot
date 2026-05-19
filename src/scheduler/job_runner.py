@@ -21,6 +21,9 @@ class JobRunner:
         self.scheduler.shutdown(wait=False)
 
     def schedule_bot_join(self, meeting: MeetingEvent) -> None:
+        existing = self.repo.get(meeting.meet_code)
+        if existing and existing["status"] in {"delivered", "failed", "cancelled"}:
+            return
         self.repo.upsert(meeting)
         run_date = meeting.start_utc - timedelta(seconds=60)
         if run_date < datetime.now(UTC):

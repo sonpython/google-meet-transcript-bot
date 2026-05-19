@@ -8,6 +8,7 @@ from pathlib import Path
 from src.config import load_settings
 from src.health_server import serve_forever
 from src.main import main
+from src.runtime_audio import start_virtual_audio_if_enabled
 from src.runtime_status import STATUS
 
 
@@ -49,6 +50,7 @@ def _hold_degraded(missing: list[str]) -> None:
 
 def run() -> None:
     threading.Thread(target=serve_forever, daemon=True).start()
+    start_virtual_audio_if_enabled()
     missing = _missing_runtime_inputs()
     if missing and os.getenv("ALLOW_DEGRADED_START", "true").lower() == "true":
         _hold_degraded(missing)

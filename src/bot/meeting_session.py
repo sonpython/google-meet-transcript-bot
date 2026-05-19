@@ -16,6 +16,7 @@ class MeetingSession:
         repo,
         browser_factory,
         audio_dir: Path,
+        audio_source: str,
         display_name: str,
         process_result,
         auto_purge_audio: bool = True,
@@ -23,6 +24,7 @@ class MeetingSession:
         self.repo = repo
         self.browser_factory = browser_factory
         self.audio_dir = audio_dir
+        self.audio_source = audio_source
         self.display_name = display_name
         self.process_result = process_result
         self.auto_purge_audio = auto_purge_audio
@@ -30,7 +32,7 @@ class MeetingSession:
 
     async def run(self, meeting: MeetingEvent) -> None:
         session = None
-        recorder = AudioRecorder(self.audio_dir)
+        recorder = AudioRecorder(self.audio_dir, self.audio_source)
         audio_path = None
         try:
             self.repo.mark_status(meeting.meet_code, "joining")

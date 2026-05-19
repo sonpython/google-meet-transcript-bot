@@ -19,11 +19,13 @@ class Settings(BaseSettings):
 
     db_path: Path = Field(default=Path("/data/meeting-assistant.db"))
     audio_dir: Path = Field(default=Path("/data/audio"))
+    audio_source: str = Field(default="meet_capture.monitor")
     output_dir: Path = Field(default=Path("/data/output"))
     debug_dir: Path = Field(default=Path("/data/debug"))
 
     bot_email: str = Field(default="bot@your-domain.com")
     bot_display_name: str = Field(default="Meeting Note-taker (bot)")
+    bot_headless: bool = Field(default=True)
     storage_state_path: Path = Field(default=Path("/data/tokens/storage-state.fernet"))
     storage_passphrase: str | None = Field(default=None)
     test_meet_code: str | None = Field(default=None)
@@ -39,6 +41,7 @@ class Settings(BaseSettings):
     discord_channel_id: str | None = Field(default=None)
 
     log_level: str = Field(default="INFO")
+    health_notify_enabled: bool = Field(default=False)
 
 
 def load_settings() -> Settings:

@@ -11,7 +11,10 @@ class MeetJoiner:
             await page.goto(f"https://meet.google.com/{meet_code}", wait_until="domcontentloaded")
             await self._fill_name_if_needed(page, display_name)
             await self._ensure_media_off(page)
-            clicked = await self._click_first_visible(page, [sel.ASK_TO_JOIN_BTN, sel.JOIN_NOW_BTN])
+            clicked = await self._click_first_visible(
+                page,
+                [sel.JOIN_HERE_TOO_BTN, sel.JOIN_NOW_BTN, sel.ASK_TO_JOIN_BTN, sel.SWITCH_HERE_BTN],
+            )
             if not clicked:
                 return JoinResult("timeout", error_msg="join button not found")
             return await self._wait_for_outcome(page, timeout)

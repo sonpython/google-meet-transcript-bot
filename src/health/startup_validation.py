@@ -25,12 +25,12 @@ async def validate_startup(
             await gemini_client.generate_text("Return OK")
         except Exception:
             failures.append("gemini ping failed")
-    if settings.telegram_bot_token and telegram_client:
+    if settings.health_notify_enabled and settings.telegram_bot_token and telegram_client:
         try:
             await telegram_client.send_text("startup validation")
         except Exception:
             failures.append("telegram ping failed")
-    if settings.discord_bot_token and discord_client:
+    if settings.health_notify_enabled and settings.discord_bot_token and discord_client:
         try:
             await discord_client.send_text("startup validation")
         except Exception:

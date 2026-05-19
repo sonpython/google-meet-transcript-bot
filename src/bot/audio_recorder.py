@@ -1,11 +1,12 @@
-import signal
 import subprocess
+import time
 from pathlib import Path
 
 
 class AudioRecorder:
-    def __init__(self, audio_dir: Path, ffmpeg_bin: str = "ffmpeg") -> None:
+    def __init__(self, audio_dir: Path, audio_source: str = "meet_capture.monitor", ffmpeg_bin: str = "ffmpeg") -> None:
         self.audio_dir = audio_dir
+        self.audio_source = audio_source
         self.ffmpeg_bin = ffmpeg_bin
         self.process: subprocess.Popen | None = None
         self.output_path: Path | None = None
@@ -20,7 +21,7 @@ class AudioRecorder:
                 "-f",
                 "pulse",
                 "-i",
-                "meet_capture.monitor",
+                self.audio_source,
                 "-ac",
                 "1",
                 "-ar",
@@ -33,19 +34,26 @@ class AudioRecorder:
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            text=True,
         )
+        time.sleep(1)
+        if self.process.poll() is not None:
+            stderr = self.process.stderr.read() if self.process.stderr else ""
+            raise RuntimeError(f"ffmpeg audio source failed: {self.audio_source}: {stderr.strip()}")
         return self.output_path
 
     def stop(self) -> Path:
         if not self.output_path:
             raise RuntimeError("Recorder was not started")
         if self.process and self.process.poll() is None:
-            self.process.send_signal(signal.SIGINT)
+            self.process.terminate()
             try:
                 self.process.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=5)
+        if not self.output_path.exists() or self.output_path.stat().st_size == 0:
+            raise RuntimeError(f"Recorder did not produce audio file: {self.output_path}")
         return self.output_path
 
     def is_running(self) -> bool:

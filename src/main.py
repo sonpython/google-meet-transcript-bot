@@ -97,19 +97,21 @@ async def main() -> None:
     credentials = auth.get_credentials()
     calendar_client = CalendarClient(credentials, settings.calendar_id)
     repo = MeetingsRepo(connect(settings.db_path))
-    browser_factory = BrowserSessionFactory(storage_store)
+    browser_factory = BrowserSessionFactory(storage_store, headless=settings.bot_headless)
     meeting_session = MeetingSession(
         repo,
         browser_factory,
         settings.audio_dir,
+        settings.audio_source,
         settings.bot_display_name,
         _build_result_processor(settings),
         settings.auto_purge_audio,
     )
     runner = JobRunner(repo, meeting_session.run)
     runner.start()
-    if gemini_client or telegram_client or discord_client:
-        daily_check = DailyHealthCheck(discord_client or telegram_client, gemini_client)
+    notification_client = (discord_client or telegram_client) if settings.health_notify_enabled else None
+    if gemini_client or notification_client:
+        daily_check = DailyHealthCheck(notification_client, gemini_client)
         runner.scheduler.add_job(
             daily_check.run,
             "interval",

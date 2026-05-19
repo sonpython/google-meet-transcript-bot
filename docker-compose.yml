@@ -9,6 +9,11 @@ services:
     environment:
       HEALTH_HOST: 0.0.0.0
       HEALTH_PORT: 8080
+      ENABLE_VIRTUAL_AUDIO: "true"
+      BOT_HEADLESS: "false"
+      PULSE_SERVER: unix:/tmp/meeting-assistant-pulse/native
+      PULSE_SINK: meet_capture
+      AUDIO_SOURCE: meet_capture.monitor
       GOOGLE_OAUTH_CLIENT_SECRETS: /run/secrets/client_secrets.json
       TOKEN_STORE_PATH: /data/tokens/user-token.fernet
       STORAGE_STATE_PATH: /data/tokens/storage-state.fernet
