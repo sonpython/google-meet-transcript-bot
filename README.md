@@ -1,6 +1,6 @@
 # Google Meet Transcript Bot
 
-Status: Phase 1 in progress.
+Status: MVP implementation complete for offline/local verification. Real Workspace OAuth, bot login, audio device, Gemini, and Telegram credentials are still required for a live pilot.
 
 This project plans a self-hosted Google Meet transcript pipeline for Workspace meetings:
 
@@ -10,7 +10,7 @@ This project plans a self-hosted Google Meet transcript pipeline for Workspace m
 4. Transcribe Vietnamese audio with Gemini.
 5. Send a combined transcript and summary to a Telegram group.
 
-## Planned Stack
+## Stack
 
 | Layer | Choice |
 |---|---|
@@ -30,7 +30,7 @@ The implementation plan lives in:
 - `plans/reports/brainstorm-260519-2103-meeting-transcript-pipeline.md`
 - `plans/reports/red-team-260519-meeting-bot.md`
 
-Phase 1 scaffolding and the Google Calendar watcher are implemented. Later bot/audio/Gemini/Telegram phases are still planning docs.
+Phases 1-8 are implemented in code. Phase 9 is a live pilot and needs real credentials plus a real Google Meet to tune UI selectors and audio routing.
 
 ## Development
 
@@ -40,10 +40,23 @@ Install dependencies:
 uv sync --dev
 ```
 
+Install browser binaries on a fresh machine:
+
+```bash
+uv run playwright install chromium
+```
+
 Run tests:
 
 ```bash
 uv run pytest
+uv run python -m compileall src tests
+```
+
+Run first-time bot browser login and save encrypted Playwright storage state:
+
+```bash
+uv run python scripts/bot_first_login.py
 ```
 
 Run the watcher after configuring `.env` and `client_secrets.json`:
@@ -52,7 +65,7 @@ Run the watcher after configuring `.env` and `client_secrets.json`:
 uv run python -m src.main
 ```
 
-The first run opens a browser for Google OAuth and stores the refresh token encrypted at `TOKEN_STORE_PATH`.
+The first Calendar OAuth run opens a browser and stores the refresh token encrypted at `TOKEN_STORE_PATH`. The bot account login is separate and uses `scripts/bot_first_login.py`.
 
 ## Required Accounts And Secrets
 
@@ -64,6 +77,27 @@ Use environment variables or private secret files only. Do not commit credential
 - Gemini API key
 - Telegram bot token and chat ID
 - Fernet passphrase for local token encryption
+
+See `.env.example` for the full runtime configuration.
+
+## Runtime Flow
+
+1. Calendar watcher finds Meet events where `USER_EMAIL` is organizer or accepted attendee.
+2. SQLite stores meeting state and APScheduler schedules the bot to join about 60 seconds before start.
+3. Playwright launches Chromium with encrypted bot storage state and joins Meet transparently as `BOT_DISPLAY_NAME`.
+4. FFmpeg records the configured Pulse/PipeWire monitor source to an Opus file.
+5. Gemini pipeline chunks audio into 14-minute mono 16kHz MP3 segments, retries across `gemini-2.5-pro`, `gemini-2.5-flash`, and `gemini-2.5-flash-lite`, rejects repeated-line hallucination loops, then writes transcript, summary, and combined notes.
+6. Telegram sends an inline TL;DR plus the full notes markdown document when Telegram settings are configured.
+7. Startup validation and randomized daily health checks verify token, storage state, Gemini, and Telegram availability.
+
+## Deployment Notes
+
+Infrastructure helpers live under `infra/`:
+
+- `infra/scripts/setup-lxc.sh` installs system packages for Debian-based LXC hosts.
+- `infra/scripts/audio-healthcheck.sh` validates audio capture prerequisites.
+- `infra/systemd/meeting-assistant.service` is the production service template.
+- `infra/systemd/install.sh` installs/enables the service after paths and env files are prepared.
 
 ## Notes
 

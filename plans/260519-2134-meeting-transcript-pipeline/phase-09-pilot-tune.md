@@ -1,7 +1,7 @@
 ---
 phase: 9
 title: "Pilot + Tuning"
-status: pending
+status: pending_live_credentials
 priority: P1
 effort: "1-2d"
 dependencies: [8]

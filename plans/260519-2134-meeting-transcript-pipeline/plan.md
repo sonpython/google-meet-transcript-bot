@@ -1,6 +1,6 @@
 ---
 title: "Meeting Transcript Pipeline (Playwright Bot)"
-status: in_progress
+status: implemented_offline
 priority: P1
 created: 2026-05-19
 source: brainstorm
@@ -13,7 +13,7 @@ blocks: []
 
 ## Summary
 
-Single-branch Playwright bot trong Proxmox LXC tự động join Google Meet meeting đủ điều kiện của `user@your-domain.com`, capture audio, transcribe Vietnamese qua Gemini 2.5 Pro, deliver combined `.md` transcript + structured summary tới Telegram group.
+Single-branch Playwright bot trong Proxmox LXC tự động join Google Meet meeting đủ điều kiện của `user@your-domain.com`, capture audio, transcribe Vietnamese qua Gemini, deliver combined `.md` transcript + structured summary tới Telegram group.
 
 **Source brainstorm:** `plans/reports/brainstorm-260519-2103-meeting-transcript-pipeline.md`
 
@@ -38,7 +38,7 @@ Calendar Watcher → Bot Orchestrator (Playwright + PipeWire + FFmpeg in LXC)
 | Audio | PipeWire + FFmpeg |
 | Container | Proxmox LXC Debian 12 unprivileged |
 | Scheduler | APScheduler |
-| Telegram | python-telegram-bot v21 |
+| Telegram | python-telegram-bot v22 |
 | DB | SQLite |
 | AI | Gemini 2.5 Pro (multimodal audio) |
 
@@ -51,15 +51,15 @@ Calendar Watcher → Bot Orchestrator (Playwright + PipeWire + FFmpeg in LXC)
 
 | # | Phase | Effort | Status |
 |---|---|---|---|
-| 1 | [Scaffolding + OAuth + Calendar Watcher](phase-01-scaffolding-oauth-calendar.md) | 1d | in_progress |
-| 2 | [SQLite state + APScheduler](phase-02-sqlite-state-scheduler.md) | 0.5d | pending |
-| 3 | [Playwright login + storageState](phase-03-playwright-login-storagestate.md) | 1d | pending |
-| 4 | [Playwright Meet join + exit handoff](phase-04-playwright-meet-join.md) | 2.5d | pending |
-| 5 | [PipeWire + FFmpeg audio capture](phase-05-pipewire-ffmpeg-audio-capture.md) | 2d | pending |
-| 6 | [Gemini transcribe + summarize](phase-06-gemini-transcribe-summarize.md) | 1.5d | pending |
-| 7 | [Telegram delivery + formatting](phase-07-telegram-delivery.md) | 0.5d | pending |
-| 8 | [Health checks + systemd + alerting](phase-08-health-checks-systemd.md) | 1d | pending |
-| 9 | [Pilot + tuning](phase-09-pilot-tune.md) | 1-2d | pending |
+| 1 | [Scaffolding + OAuth + Calendar Watcher](phase-01-scaffolding-oauth-calendar.md) | 1d | implemented |
+| 2 | [SQLite state + APScheduler](phase-02-sqlite-state-scheduler.md) | 0.5d | implemented |
+| 3 | [Playwright login + storageState](phase-03-playwright-login-storagestate.md) | 1d | implemented |
+| 4 | [Playwright Meet join + exit handoff](phase-04-playwright-meet-join.md) | 2.5d | implemented_offline |
+| 5 | [PipeWire + FFmpeg audio capture](phase-05-pipewire-ffmpeg-audio-capture.md) | 2d | implemented_offline |
+| 6 | [Gemini transcribe + summarize](phase-06-gemini-transcribe-summarize.md) | 1.5d | implemented_offline |
+| 7 | [Telegram delivery + formatting](phase-07-telegram-delivery.md) | 0.5d | implemented |
+| 8 | [Health checks + systemd + alerting](phase-08-health-checks-systemd.md) | 1d | implemented |
+| 9 | [Pilot + tuning](phase-09-pilot-tune.md) | 1-2d | pending_live_credentials |
 
 **Total:** ~11-12 dev days
 

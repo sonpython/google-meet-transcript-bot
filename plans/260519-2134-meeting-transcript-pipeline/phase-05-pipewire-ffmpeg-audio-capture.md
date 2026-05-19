@@ -1,7 +1,7 @@
 ---
 phase: 5
 title: "PipeWire + FFmpeg Audio Capture"
-status: pending
+status: implemented_offline
 priority: P1
 effort: "2d"
 dependencies: []

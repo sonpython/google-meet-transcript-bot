@@ -1,7 +1,7 @@
 ---
 phase: 8
 title: "Health Checks + systemd + Alerting"
-status: pending
+status: implemented
 priority: P2
 effort: "1d"
 dependencies: [6, 7]

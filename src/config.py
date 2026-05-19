@@ -16,6 +16,25 @@ class Settings(BaseSettings):
     calendar_id: str = Field(default="primary")
     calendar_lookahead_minutes: int = Field(default=60, gt=0)
     calendar_poll_interval_seconds: int = Field(default=300, gt=0)
+
+    db_path: Path = Field(default=Path("/data/meeting-assistant.db"))
+    audio_dir: Path = Field(default=Path("/data/audio"))
+    output_dir: Path = Field(default=Path("/data/output"))
+    debug_dir: Path = Field(default=Path("/data/debug"))
+
+    bot_email: str = Field(default="bot@your-domain.com")
+    bot_display_name: str = Field(default="Meeting Note-taker (bot)")
+    storage_state_path: Path = Field(default=Path("/data/tokens/storage-state.fernet"))
+    storage_passphrase: str | None = Field(default=None)
+    test_meet_code: str | None = Field(default=None)
+
+    gemini_api_key: str | None = Field(default=None)
+    gemini_model: str = Field(default="gemini-2.5-pro")
+    auto_purge_audio: bool = Field(default=True)
+
+    telegram_bot_token: str | None = Field(default=None)
+    telegram_chat_id: str | None = Field(default=None)
+
     log_level: str = Field(default="INFO")
 
 

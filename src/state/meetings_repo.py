@@ -1,0 +1,71 @@
+from datetime import UTC, datetime
+from sqlite3 import Connection
+
+from src.models.meeting_event import MeetingEvent
+
+TERMINAL_STATUSES = {"delivered", "failed", "cancelled"}
+
+
+class MeetingsRepo:
+    def __init__(self, conn: Connection) -> None:
+        self.conn = conn
+
+    def upsert(self, meeting: MeetingEvent) -> bool:
+        existing = self.get(meeting.meet_code)
+        if existing and existing["status"] in TERMINAL_STATUSES:
+            return False
+        if existing:
+            self.conn.execute(
+                """
+                UPDATE meetings
+                SET event_id=?, scheduled_start_utc=?, title=?, updated_at=CURRENT_TIMESTAMP
+                WHERE meet_code=?
+                """,
+                (meeting.event_id, meeting.start_utc.isoformat(), meeting.title, meeting.meet_code),
+            )
+            self.conn.commit()
+            return False
+        self.conn.execute(
+            """
+            INSERT INTO meetings (meet_code, event_id, scheduled_start_utc, title, status)
+            VALUES (?, ?, ?, ?, 'scheduled')
+            """,
+            (meeting.meet_code, meeting.event_id, meeting.start_utc.isoformat(), meeting.title),
+        )
+        self.conn.commit()
+        return True
+
+    def get(self, meet_code: str):
+        cur = self.conn.execute("SELECT * FROM meetings WHERE meet_code=?", (meet_code,))
+        return cur.fetchone()
+
+    def get_pending(self) -> list:
+        cur = self.conn.execute(
+            """
+            SELECT * FROM meetings
+            WHERE status IN ('scheduled', 'joining', 'recording', 'processing')
+            ORDER BY scheduled_start_utc
+            """
+        )
+        return list(cur.fetchall())
+
+    def mark_status(self, meet_code: str, status: str, error: str | None = None, **fields) -> None:
+        assignments = ["status=?", "last_error=?", "updated_at=CURRENT_TIMESTAMP"]
+        values = [status, error]
+        for key, value in fields.items():
+            assignments.append(f"{key}=?")
+            values.append(value)
+        values.append(meet_code)
+        self.conn.execute(
+            f"UPDATE meetings SET {', '.join(assignments)} WHERE meet_code=?",
+            tuple(values),
+        )
+        self.conn.commit()
+
+    def mark_delivered(self, meet_code: str, notes_path: str) -> None:
+        self.mark_status(
+            meet_code,
+            "delivered",
+            notes_path=notes_path,
+            delivered_at=datetime.now(UTC).isoformat(),
+        )

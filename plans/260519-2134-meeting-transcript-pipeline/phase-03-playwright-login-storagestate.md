@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "Playwright Login + storageState"
-status: pending
+status: implemented
 priority: P1
 effort: "1d"
 dependencies: [1]

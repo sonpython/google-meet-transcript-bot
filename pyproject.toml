@@ -5,11 +5,15 @@ description = "Self-hosted Google Meet transcript pipeline"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "apscheduler>=3.11.0",
     "cryptography>=46.0.0",
     "google-api-python-client>=2.187.0",
     "google-auth>=2.43.0",
     "google-auth-oauthlib>=1.2.3",
+    "google-genai>=1.56.0",
+    "playwright>=1.57.0",
     "pydantic-settings>=2.12.0",
+    "python-telegram-bot>=22.6",
     "structlog>=25.5.0",
 ]
 

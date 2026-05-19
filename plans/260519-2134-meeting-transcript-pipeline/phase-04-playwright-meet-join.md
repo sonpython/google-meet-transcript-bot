@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Playwright Meet Join + Exit Handoff"
-status: pending
+status: implemented_offline
 priority: P1
 effort: "2.5d"
 dependencies: [3]

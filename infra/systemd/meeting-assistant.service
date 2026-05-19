@@ -1,0 +1,19 @@
+[Unit]
+Description=Meeting Assistant Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=meetbot
+WorkingDirectory=/opt/meeting-assistant
+ExecStartPre=/opt/meeting-assistant/infra/scripts/audio-healthcheck.sh
+ExecStart=/opt/meeting-assistant/.venv/bin/python -m src.main
+Restart=on-failure
+RestartSec=10s
+StartLimitIntervalSec=60
+StartLimitBurst=5
+EnvironmentFile=/etc/meeting-assistant/env
+
+[Install]
+WantedBy=multi-user.target

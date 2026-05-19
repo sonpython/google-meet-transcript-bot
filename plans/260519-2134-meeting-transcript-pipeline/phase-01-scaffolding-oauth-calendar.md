@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Scaffolding + OAuth + Calendar Watcher"
-status: in_progress
+status: implemented
 priority: P1
 effort: "1d"
 dependencies: []

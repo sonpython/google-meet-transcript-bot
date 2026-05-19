@@ -1,7 +1,7 @@
 ---
 phase: 6
 title: "Gemini Transcribe + Summarize"
-status: pending
+status: implemented_offline
 priority: P1
 effort: "1.5d"
 dependencies: [4, 5]

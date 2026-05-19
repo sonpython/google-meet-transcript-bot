@@ -1,7 +1,7 @@
 ---
 phase: 7
 title: "Telegram Delivery + Formatting"
-status: pending
+status: implemented
 priority: P1
 effort: "0.5d"
 dependencies: [6]
