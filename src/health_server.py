@@ -13,7 +13,7 @@ from src.calendar_watcher.client import CalendarClient
 from src.config import load_settings
 from src.runtime_status import STATUS
 from src.state.db import connect
-from src.state.meetings_repo import MeetingsRepo
+from src.state.meetings_repo import TERMINAL_STATUSES, MeetingsRepo
 
 
 class AdminHandler(BaseHTTPRequestHandler):
@@ -300,23 +300,31 @@ def _upcoming_events() -> list[dict]:
     token_store = TokenStore(settings.token_store_path, settings.token_passphrase)
     auth = OAuthUserAuth(token_store, str(settings.google_oauth_client_secrets), settings.oauth_redirect_port)
     client = CalendarClient(auth.get_credentials(), settings.calendar_id)
+    conn = connect(settings.db_path)
     events = []
-    for raw in client.list_upcoming(settings.calendar_lookahead_minutes):
-        meeting = to_meeting_event(raw, settings.user_email)
-        events.append(
-            {
-                "event_id": raw.get("id"),
-                "title": raw.get("summary") or "Untitled meeting",
-                "start": raw.get("start"),
-                "end": raw.get("end"),
-                "meet_code": meeting.meet_code if meeting else None,
-                "organizer": raw.get("organizer"),
-                "attendees": raw.get("attendees", []),
-                "hangoutLink": raw.get("hangoutLink"),
-                "qualifying": meeting is not None,
-            }
-        )
-    return events
+    try:
+        repo = MeetingsRepo(conn)
+        for raw in client.list_upcoming(settings.calendar_lookahead_minutes):
+            meeting = to_meeting_event(raw, settings.user_email)
+            stored = repo.get(meeting.meet_code) if meeting else None
+            stored_status = stored["status"] if stored else None
+            events.append(
+                {
+                    "event_id": raw.get("id"),
+                    "title": raw.get("summary") or "Untitled meeting",
+                    "start": raw.get("start"),
+                    "end": raw.get("end"),
+                    "meet_code": meeting.meet_code if meeting else None,
+                    "organizer": raw.get("organizer"),
+                    "attendees": raw.get("attendees", []),
+                    "hangoutLink": raw.get("hangoutLink"),
+                    "status": stored_status,
+                    "qualifying": meeting is not None and stored_status not in TERMINAL_STATUSES,
+                }
+            )
+        return events
+    finally:
+        conn.close()
 
 
 def _row_to_dict(row) -> dict:
