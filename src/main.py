@@ -27,6 +27,8 @@ from src.telegram_sender.delivery import TelegramDelivery
 
 def configure_logging(level: str) -> None:
     logging.basicConfig(level=level.upper(), format="%(message)s")
+    for noisy_logger in ("httpx", "httpcore", "telegram"):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
     structlog.configure(
         processors=[
             structlog.processors.TimeStamper(fmt="iso"),

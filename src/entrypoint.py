@@ -25,6 +25,10 @@ def _missing_runtime_inputs() -> list[str]:
         missing.append(f"GOOGLE_OAUTH_CLIENT_SECRETS_INVALID:{settings.google_oauth_client_secrets}")
     if not settings.gemini_api_key:
         missing.append("GEMINI_API_KEY")
+    if not Path(settings.token_store_path).exists():
+        missing.append(f"TOKEN_STORE_PATH:{settings.token_store_path}")
+    if not Path(settings.storage_state_path).exists():
+        missing.append(f"STORAGE_STATE_PATH:{settings.storage_state_path}")
     return missing
 
 
