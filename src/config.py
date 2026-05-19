@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = Field(default=None)
     gemini_model: str = Field(default="gemini-2.5-pro")
     auto_purge_audio: bool = Field(default=True)
+    delivery_enabled: bool = Field(default=False)
 
     telegram_bot_token: str | None = Field(default=None)
     telegram_chat_id: str | None = Field(default=None)
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO")
     health_notify_enabled: bool = Field(default=False)
+    admin_token: str | None = Field(default=None)
 
 
 def load_settings() -> Settings:

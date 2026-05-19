@@ -76,5 +76,7 @@ def test_pipeline_writes_outputs(tmp_path: Path) -> None:
     transcript_path, summary_path, notes_path = asyncio.run(pipeline.process(result))
 
     assert transcript_path.exists()
-    assert summary_path.read_text() == "## TL;DR\nSummary content"
+    assert "## Segment " in summary_path.read_text()
+    assert "## TL;DR\nSummary content" in summary_path.read_text()
     assert "# Weekly Sync" in notes_path.read_text()
+    assert "- Meet code: abc-defg-hij" in notes_path.read_text()

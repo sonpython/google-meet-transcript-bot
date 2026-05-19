@@ -1,5 +1,6 @@
 import subprocess
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -13,7 +14,7 @@ class AudioRecorder:
 
     def start(self, meet_code: str) -> Path:
         self.audio_dir.mkdir(parents=True, exist_ok=True)
-        self.output_path = self.audio_dir / f"{meet_code}.opus"
+        self.output_path = self._next_output_path(meet_code)
         self.process = subprocess.Popen(
             [
                 self.ffmpeg_bin,
@@ -58,3 +59,10 @@ class AudioRecorder:
 
     def is_running(self) -> bool:
         return bool(self.process and self.process.poll() is None)
+
+    def _next_output_path(self, meet_code: str) -> Path:
+        base_path = self.audio_dir / f"{meet_code}.opus"
+        if not base_path.exists():
+            return base_path
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        return self.audio_dir / f"{meet_code}-{stamp}.opus"

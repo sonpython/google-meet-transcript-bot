@@ -45,6 +45,11 @@ class MeetingSession:
             self.repo.mark_status(meeting.meet_code, "recording", audio_path=str(audio_path))
             reason, participants, duration = await MeetMonitor(session.page).run_until_exit()
             final_path = recorder.stop()
+            if reason == "no_one_joined":
+                self.repo.mark_status(meeting.meet_code, "no_one_joined", None, audio_path=str(final_path))
+                if self.auto_purge_audio:
+                    os.remove(final_path)
+                return
             result = MeetingResult(
                 meeting.meet_code,
                 final_path,
@@ -54,8 +59,9 @@ class MeetingSession:
                 meeting.title,
             )
             self.repo.mark_status(meeting.meet_code, "processing", audio_path=str(final_path))
-            notes_path = await self.process_result(result)
-            self.repo.mark_delivered(meeting.meet_code, str(notes_path))
+            output_paths = await self.process_result(result)
+            notes_path, extra_paths = _normalize_output_paths(output_paths)
+            self.repo.mark_delivered(meeting.meet_code, str(notes_path), **extra_paths)
             if self.auto_purge_audio:
                 os.remove(final_path)
         except Exception as exc:
@@ -66,3 +72,13 @@ class MeetingSession:
         finally:
             if session:
                 await session.close()
+
+
+def _normalize_output_paths(output_paths) -> tuple[Path, dict[str, str]]:
+    if isinstance(output_paths, tuple):
+        transcript_path, summary_path, notes_path = output_paths
+        return notes_path, {
+            "transcript_path": str(transcript_path),
+            "summary_path": str(summary_path),
+        }
+    return output_paths, {}

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import signal
+from datetime import UTC, datetime
 
 import structlog
 
@@ -47,15 +48,15 @@ def _build_result_processor(settings):
             raise RuntimeError("GEMINI_API_KEY is required for meeting processing")
         gemini = GeminiPipeline(GeminiClient(settings.gemini_api_key, settings.gemini_model), settings.output_dir)
         transcript_path, summary_path, notes_path = await gemini.process(result)
-        if settings.discord_bot_token and settings.discord_channel_id:
+        if settings.delivery_enabled and settings.discord_bot_token and settings.discord_channel_id:
             discord = DiscordDelivery(DiscordClient(settings.discord_bot_token, settings.discord_channel_id))
             summary = summary_path.read_text()
             await discord.deliver(result, notes_path, summary)
-        elif settings.telegram_bot_token and settings.telegram_chat_id:
+        elif settings.delivery_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
             telegram = TelegramDelivery(TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id))
             summary = summary_path.read_text()
             await telegram.deliver(result, notes_path, summary)
-        return notes_path
+        return transcript_path, summary_path, notes_path
 
     return process
 
@@ -133,10 +134,35 @@ async def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop_event.set)
     watcher_task = asyncio.create_task(watcher.run_forever())
+    command_task = asyncio.create_task(_run_admin_command_loop(repo, runner))
     await stop_event.wait()
     watcher_task.cancel()
+    command_task.cancel()
     runner.shutdown()
     log.info("meeting_assistant_stopping")
+
+
+async def _run_admin_command_loop(repo: MeetingsRepo, runner: JobRunner) -> None:
+    while True:
+        for command in repo.claim_pending_rejoins():
+            try:
+                row = repo.get(command["meet_code"])
+                if not row:
+                    repo.complete_command(command["id"], "failed", "meeting not found")
+                    continue
+                meeting = MeetingEvent(
+                    meet_code=row["meet_code"],
+                    event_id=row["event_id"],
+                    start_utc=datetime.now(UTC),
+                    title=row["title"],
+                    organizer=None,
+                    attendees=(),
+                )
+                runner.schedule_manual_join(meeting, command["id"])
+                repo.complete_command(command["id"])
+            except Exception as exc:
+                repo.complete_command(command["id"], "failed", str(exc))
+        await asyncio.sleep(5)
 
 
 if __name__ == "__main__":

@@ -22,18 +22,25 @@ class JobRunner:
 
     def schedule_bot_join(self, meeting: MeetingEvent) -> None:
         existing = self.repo.get(meeting.meet_code)
-        if existing and existing["status"] in {"delivered", "failed", "cancelled"}:
+        if existing and existing["status"] in {"delivered", "failed", "cancelled", "no_one_joined"}:
             return
         self.repo.upsert(meeting)
+        self._schedule(meeting, f"meet:{meeting.meet_code}")
+
+    def schedule_manual_join(self, meeting: MeetingEvent, command_id: int) -> None:
+        self.repo.mark_status(meeting.meet_code, "scheduled", None)
+        self._schedule(meeting, f"rejoin:{meeting.meet_code}:{command_id}", immediate=True)
+
+    def _schedule(self, meeting: MeetingEvent, job_id: str, immediate: bool = False) -> None:
         run_date = meeting.start_utc - timedelta(seconds=60)
-        if run_date < datetime.now(UTC):
+        if immediate or run_date < datetime.now(UTC):
             run_date = datetime.now(UTC)
         self.scheduler.add_job(
             self.run_meeting,
             "date",
             run_date=run_date,
             args=[meeting],
-            id=f"meet:{meeting.meet_code}",
+            id=job_id,
             replace_existing=True,
             misfire_grace_time=300,
         )

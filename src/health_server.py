@@ -1,28 +1,344 @@
 import json
 import os
+from datetime import UTC, datetime
+from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
+from src.auth.oauth_user import OAuthUserAuth
+from src.auth.token_store import TokenStore
+from src.calendar_watcher.classifier import to_meeting_event
+from src.calendar_watcher.client import CalendarClient
+from src.config import load_settings
 from src.runtime_status import STATUS
+from src.state.db import connect
+from src.state.meetings_repo import MeetingsRepo
 
 
-class HealthHandler(BaseHTTPRequestHandler):
+class AdminHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        if self.path in ("/", "/status", "/healthz"):
-            body = json.dumps(STATUS.snapshot(), ensure_ascii=False).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+        parsed = urlparse(self.path)
+        if parsed.path in ("/", "/status", "/healthz"):
+            self._send_json(STATUS.snapshot())
+            return
+        if parsed.path == "/admin":
+            if not self._is_authorized(parsed):
+                self._send_html(_login_html())
+                return
+            self._send_html(_admin_html())
+            return
+        if parsed.path.startswith("/admin/api/"):
+            if not self._is_authorized(parsed):
+                self._send_json({"error": "unauthorized"}, status=401)
+                return
+            self._handle_api(parsed)
             return
         self.send_error(404)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/admin/login":
+            self._handle_login()
+            return
+        if parsed.path.startswith("/admin/api/"):
+            if not self._is_authorized(parsed):
+                self._send_json({"error": "unauthorized"}, status=401)
+                return
+            self._handle_api_post(parsed)
+            return
+        self.send_error(404)
+
+    def _handle_login(self) -> None:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        body = self.rfile.read(length).decode("utf-8")
+        token = parse_qs(body).get("token", [""])[0]
+        if token and token == (load_settings().admin_token or ""):
+            self.send_response(303)
+            self.send_header("Location", "/admin")
+            self.send_header("Set-Cookie", f"admin_token={token}; Path=/admin; HttpOnly; SameSite=Lax")
+            self.end_headers()
+            return
+        self._send_html(_login_html("Invalid token"), status=401)
+
+    def _handle_api(self, parsed) -> None:
+        suffix = parsed.path.removeprefix("/admin/api/")
+        try:
+            if suffix == "status":
+                self._send_json(STATUS.snapshot())
+            elif suffix == "meetings":
+                self._send_json({"meetings": _list_meetings()})
+            elif suffix.startswith("meetings/") and suffix.endswith("/audio"):
+                meet_code = unquote(suffix.removeprefix("meetings/").removesuffix("/audio"))
+                index = int(parse_qs(parsed.query).get("index", ["0"])[0] or "0")
+                self._send_audio(meet_code, index)
+            elif suffix.startswith("meetings/"):
+                self._send_json({"meeting": _meeting_detail(unquote(suffix.removeprefix("meetings/")))})
+            elif suffix == "upcoming":
+                self._send_json({"events": _upcoming_events()})
+            else:
+                self._send_json({"error": "not found"}, status=404)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=500)
+
+    def _handle_api_post(self, parsed) -> None:
+        suffix = parsed.path.removeprefix("/admin/api/")
+        if suffix.startswith("meetings/") and suffix.endswith("/rejoin"):
+            meet_code = unquote(suffix.removeprefix("meetings/").removesuffix("/rejoin"))
+            self._send_json(_request_rejoin(meet_code))
+            return
+        self._send_json({"error": "not found"}, status=404)
+
+    def _is_authorized(self, parsed) -> bool:
+        expected = load_settings().admin_token
+        if not expected:
+            return False
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and auth.removeprefix("Bearer ").strip() == expected:
+            return True
+        query_token = parse_qs(parsed.query).get("token", [""])[0]
+        if query_token == expected:
+            return True
+        raw_cookie = self.headers.get("Cookie", "")
+        if raw_cookie:
+            parsed_cookie = cookies.SimpleCookie(raw_cookie)
+            morsel = parsed_cookie.get("admin_token")
+            if morsel and morsel.value == expected:
+                return True
+        return False
+
+    def _send_json(self, payload, status: int = 200) -> None:
+        body = json.dumps(payload, ensure_ascii=False, default=_json_default).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_html(self, html: str, status: int = 200) -> None:
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_audio(self, meet_code: str, index: int = 0) -> None:
+        detail = _meeting_detail(meet_code)
+        segments = detail.get("files", {}).get("audio_segments", [])
+        audio = segments[index] if 0 <= index < len(segments) else detail.get("files", {}).get("audio", {})
+        path = Path(audio.get("path", ""))
+        if not audio.get("exists") or not path.exists():
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/ogg")
+        self.send_header("Content-Length", str(path.stat().st_size))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 256):
+                self.wfile.write(chunk)
 
     def log_message(self, format: str, *args) -> None:
         return
 
 
+def _list_meetings() -> list[dict]:
+    settings = load_settings()
+    conn = connect(settings.db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT meet_code, event_id, scheduled_start_utc, title, status,
+                   transcript_path, summary_path, notes_path, audio_path,
+                   attempts, last_error, delivered_at, created_at, updated_at
+            FROM meetings
+            ORDER BY scheduled_start_utc DESC, updated_at DESC
+            LIMIT 200
+            """
+        ).fetchall()
+        return [_row_to_dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _meeting_detail(meet_code: str) -> dict:
+    settings = load_settings()
+    conn = connect(settings.db_path)
+    try:
+        row = conn.execute("SELECT * FROM meetings WHERE meet_code=?", (meet_code,)).fetchone()
+        if not row:
+            raise ValueError("meeting not found")
+        meeting = _row_to_dict(row)
+    finally:
+        conn.close()
+
+    paths = _meeting_paths(meeting)
+    files = {}
+    for key, path in paths.items():
+        files[key] = _file_payload(path)
+    files["audio_segments"] = [_file_payload(path) for path in _audio_segment_paths(meet_code, settings.audio_dir)]
+    meeting["files"] = files
+    meeting["metadata"] = {
+        "meet_code": meeting.get("meet_code"),
+        "event_id": meeting.get("event_id"),
+        "status": meeting.get("status"),
+        "scheduled_start_utc": meeting.get("scheduled_start_utc"),
+        "delivered_at": meeting.get("delivered_at"),
+        "updated_at": meeting.get("updated_at"),
+    }
+    return meeting
+
+
+def _request_rejoin(meet_code: str) -> dict:
+    settings = load_settings()
+    conn = connect(settings.db_path)
+    try:
+        repo = MeetingsRepo(conn)
+        meeting = repo.get(meet_code)
+        if not meeting:
+            return {"error": "meeting not found"}
+        if meeting["status"] in {"joining", "recording", "processing"}:
+            return {"error": f"meeting already {meeting['status']}"}
+        command_id = repo.request_rejoin(meet_code)
+        return {"ok": True, "command_id": command_id, "meet_code": meet_code}
+    finally:
+        conn.close()
+
+
+def _meeting_paths(meeting: dict) -> dict[str, Path | None]:
+    paths: dict[str, Path | None] = {
+        "audio": _path_or_none(meeting.get("audio_path")),
+        "transcript": _path_or_none(meeting.get("transcript_path")),
+        "summary": _path_or_none(meeting.get("summary_path")),
+        "notes": _path_or_none(meeting.get("notes_path")),
+    }
+    notes = paths["notes"]
+    if notes and notes.name.startswith("meeting-notes-"):
+        slug = notes.name.removeprefix("meeting-notes-").removesuffix(".md")
+        paths["transcript"] = paths["transcript"] or notes.with_name(f"transcript-{slug}.md")
+        paths["summary"] = paths["summary"] or notes.with_name(f"summary-{slug}.md")
+    return paths
+
+
+def _audio_segment_paths(meet_code: str, audio_dir: Path) -> list[Path]:
+    if not audio_dir.exists():
+        return []
+    paths = sorted(audio_dir.glob(f"{meet_code}*.opus"), key=lambda path: path.stat().st_mtime)
+    return paths
+
+
+def _file_payload(path: Path | None) -> dict:
+    if not path:
+        return {"exists": False}
+    payload = {"path": str(path), "exists": path.exists()}
+    if path.exists():
+        payload["size"] = path.stat().st_size
+        if path.suffix.lower() in {".md", ".txt", ".json"}:
+            payload["content"] = path.read_text(errors="replace")
+    return payload
+
+
+def _upcoming_events() -> list[dict]:
+    settings = load_settings()
+    token_store = TokenStore(settings.token_store_path, settings.token_passphrase)
+    auth = OAuthUserAuth(token_store, str(settings.google_oauth_client_secrets), settings.oauth_redirect_port)
+    client = CalendarClient(auth.get_credentials(), settings.calendar_id)
+    events = []
+    for raw in client.list_upcoming(settings.calendar_lookahead_minutes):
+        meeting = to_meeting_event(raw, settings.user_email)
+        events.append(
+            {
+                "event_id": raw.get("id"),
+                "title": raw.get("summary") or "Untitled meeting",
+                "start": raw.get("start"),
+                "end": raw.get("end"),
+                "meet_code": meeting.meet_code if meeting else None,
+                "organizer": raw.get("organizer"),
+                "attendees": raw.get("attendees", []),
+                "hangoutLink": raw.get("hangoutLink"),
+                "qualifying": meeting is not None,
+            }
+        )
+    return events
+
+
+def _row_to_dict(row) -> dict:
+    return {key: row[key] for key in row.keys()}
+
+
+def _path_or_none(value: str | None) -> Path | None:
+    return Path(value) if value else None
+
+
+def _json_default(value):
+    if isinstance(value, (datetime, Path)):
+        return str(value)
+    return str(value)
+
+
+def _login_html(error: str = "") -> str:
+    error_html = f"<p class='error'>{error}</p>" if error else ""
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Meeting Assistant Admin</title>{_style()}</head>
+<body class="login"><form method="post" action="/admin/login" class="login-box">
+<h1>Meeting Assistant</h1><label>Admin token</label><input name="token" type="password" autofocus>
+{error_html}<button type="submit">Sign in</button></form></body></html>"""
+
+
+def _admin_html() -> str:
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Meeting Assistant Admin</title>{_style()}</head>
+<body><header><h1>Meeting Assistant</h1><div id="status">Loading</div></header>
+<main><section class="panel"><div class="panel-head"><h2>Upcoming</h2><button onclick="loadAll()">Refresh</button></div><div id="upcoming"></div></section>
+<section class="grid"><div class="panel"><h2>History</h2><div id="meetings"></div></div>
+<div class="panel detail"><h2>Meeting Detail</h2><div id="detail">Select a meeting.</div></div></section></main>
+<script>{_script()}</script></body></html>"""
+
+
+def _style() -> str:
+    return """<style>
+body{margin:0;background:#f6f7f9;color:#17202a;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px}
+header{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#111827;color:#fff}
+h1,h2,h3{margin:0} h1{font-size:18px} h2{font-size:15px}
+main{padding:18px;display:flex;flex-direction:column;gap:16px}.grid{display:grid;grid-template-columns:minmax(320px,430px) 1fr;gap:16px}
+.panel{background:#fff;border:1px solid #d8dee8;border-radius:8px;overflow:hidden}.panel h2,.panel-head{padding:12px 14px;border-bottom:1px solid #e5e9f0}.panel-head{display:flex;align-items:center;justify-content:space-between}
+button{height:32px;border:1px solid #c8d0dc;background:#fff;border-radius:6px;padding:0 10px;cursor:pointer}.row{padding:10px 14px;border-bottom:1px solid #eef1f5;cursor:pointer}.row:hover{background:#f3f6fa}
+.muted{color:#667085}.status{display:inline-block;border-radius:999px;padding:2px 8px;background:#eef2ff;color:#3730a3;font-size:12px}.status.failed{background:#fee2e2;color:#991b1b}.status.delivered{background:#dcfce7;color:#166534}.status.no_one_joined{background:#f3f4f6;color:#4b5563}.status.recording,.status.processing{background:#fef3c7;color:#92400e}
+.detail{min-height:520px}.detail-body{padding:14px}.kv{display:grid;grid-template-columns:160px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid #eef1f5}pre{white-space:pre-wrap;background:#0f172a;color:#e5e7eb;padding:12px;border-radius:6px;max-height:360px;overflow:auto}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 10px;border-bottom:1px solid #eef1f5}.login{min-height:100vh;display:grid;place-items:center}.login-box{width:min(360px,calc(100vw - 32px));background:#fff;border:1px solid #d8dee8;border-radius:8px;padding:20px;display:flex;flex-direction:column;gap:10px}.login-box input{height:36px;border:1px solid #c8d0dc;border-radius:6px;padding:0 10px}.error{color:#b42318;margin:0}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+</style>"""
+
+
+def _script() -> str:
+    return r"""
+async function api(path, opts={}){const r=await fetch('/admin/api/'+path,{cache:'no-store',...opts}); if(!r.ok) throw new Error(await r.text()); return r.json();}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function fmt(v){if(!v)return ''; try{return new Date(v).toLocaleString();}catch{return v;}}
+function badge(status){return `<span class="status ${esc(status)}">${esc(status)}</span>`}
+async function loadAll(){await Promise.all([loadStatus(),loadUpcoming(),loadMeetings()]);}
+async function loadStatus(){const d=await api('status'); document.getElementById('status').textContent=`${d.state}: ${d.detail||''}`;}
+async function loadUpcoming(){const d=await api('upcoming'); const rows=d.events.map(e=>`<tr><td>${esc(e.title)}</td><td>${fmt(e.start?.dateTime||e.start?.date)}</td><td>${esc(e.meet_code||'')}</td><td>${e.qualifying?'yes':'no'}</td></tr>`).join(''); document.getElementById('upcoming').innerHTML=`<table><thead><tr><th>Title</th><th>Start</th><th>Meet</th><th>Tracked</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">No upcoming events.</td></tr>'}</tbody></table>`;}
+async function loadMeetings(){const d=await api('meetings'); document.getElementById('meetings').innerHTML=d.meetings.map(m=>`<div class="row" onclick="loadDetail('${esc(m.meet_code)}')"><strong>${esc(m.title)}</strong><div>${badge(m.status)} <span class="muted">${esc(m.meet_code)} · ${fmt(m.scheduled_start_utc)}</span></div></div>`).join('')||'<div class="row muted">No meetings.</div>';}
+async function loadDetail(code){const d=await api('meetings/'+encodeURIComponent(code)); const m=d.meeting; const files=m.files||{}; document.getElementById('detail').innerHTML=`<div class="detail-body"><h3>${esc(m.title)}</h3><p><button onclick="rejoin('${esc(m.meet_code)}')">Rejoin</button></p>
+${kv('Status',badge(m.status))}${kv('Meet code',esc(m.meet_code))}${kv('Event ID',esc(m.event_id))}${kv('Scheduled',fmt(m.scheduled_start_utc))}${kv('Delivered',fmt(m.delivered_at))}${kv('Audio',fileLine(files.audio))}${kv('Listen',audioPlayer(m))}${kv('Notes',fileLine(files.notes))}${kv('Transcript',fileLine(files.transcript))}${m.last_error?kv('Error',esc(m.last_error)):''}
+<h3>Summary</h3><pre>${esc(files.summary?.content||'')}</pre><h3>Transcript</h3><pre>${esc(files.transcript?.content||'')}</pre><h3>Notes</h3><pre>${esc(files.notes?.content||'')}</pre></div>`;}
+async function rejoin(code){const result=await api('meetings/'+encodeURIComponent(code)+'/rejoin',{method:'POST'}); if(result.error){alert(result.error); return;} alert('Rejoin queued'); await loadAll(); await loadDetail(code);}
+function kv(k,v){return `<div class="kv"><div class="muted">${k}</div><div>${v}</div></div>`}
+function fileLine(f){return f?.exists?`${esc(f.path)} <span class="muted">(${f.size} bytes)</span>`:'missing'}
+function audioPlayer(m){const segments=m.files?.audio_segments||[]; if(!segments.length)return 'missing'; return segments.map((f,i)=>`<div><span class="muted">Segment ${i+1}</span><br><audio controls preload="none" src="/admin/api/meetings/${encodeURIComponent(m.meet_code)}/audio?index=${i}"></audio></div>`).join('');}
+loadAll(); setInterval(loadStatus,15000);
+"""
+
+
 def serve_forever() -> None:
     host = os.getenv("HEALTH_HOST", "0.0.0.0")
     port = int(os.getenv("HEALTH_PORT", "8080"))
-    server = ThreadingHTTPServer((host, port), HealthHandler)
+    server = ThreadingHTTPServer((host, port), AdminHandler)
     server.serve_forever()

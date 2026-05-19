@@ -25,6 +25,16 @@ CREATE TABLE IF NOT EXISTS failures (
     count INTEGER NOT NULL DEFAULT 0,
     last_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS admin_commands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    command TEXT NOT NULL,
+    meet_code TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

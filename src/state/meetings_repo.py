@@ -3,7 +3,7 @@ from sqlite3 import Connection
 
 from src.models.meeting_event import MeetingEvent
 
-TERMINAL_STATUSES = {"delivered", "failed", "cancelled"}
+TERMINAL_STATUSES = {"delivered", "failed", "cancelled", "no_one_joined"}
 
 
 class MeetingsRepo:
@@ -62,10 +62,53 @@ class MeetingsRepo:
         )
         self.conn.commit()
 
-    def mark_delivered(self, meet_code: str, notes_path: str) -> None:
+    def mark_delivered(self, meet_code: str, notes_path: str, **fields) -> None:
         self.mark_status(
             meet_code,
             "delivered",
             notes_path=notes_path,
             delivered_at=datetime.now(UTC).isoformat(),
+            **fields,
         )
+
+    def request_rejoin(self, meet_code: str) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO admin_commands (command, meet_code, status)
+            VALUES ('rejoin', ?, 'pending')
+            """,
+            (meet_code,),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def claim_pending_rejoins(self, limit: int = 5) -> list:
+        rows = list(
+            self.conn.execute(
+                """
+                SELECT * FROM admin_commands
+                WHERE command='rejoin' AND status='pending'
+                ORDER BY created_at
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+        for row in rows:
+            self.conn.execute(
+                "UPDATE admin_commands SET status='running', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (row["id"],),
+            )
+        self.conn.commit()
+        return rows
+
+    def complete_command(self, command_id: int, status: str = "done", error: str | None = None) -> None:
+        self.conn.execute(
+            """
+            UPDATE admin_commands
+            SET status=?, error=?, updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (status, error, command_id),
+        )
+        self.conn.commit()
