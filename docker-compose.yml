@@ -1,0 +1,31 @@
+services:
+  meeting-assistant:
+    build: .
+    image: meeting-assistant:latest
+    container_name: meeting-assistant
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HEALTH_HOST: 0.0.0.0
+      HEALTH_PORT: 8080
+      GOOGLE_OAUTH_CLIENT_SECRETS: /run/secrets/client_secrets.json
+      TOKEN_STORE_PATH: /data/tokens/user-token.fernet
+      STORAGE_STATE_PATH: /data/tokens/storage-state.fernet
+      DB_PATH: /data/meeting-assistant.db
+      AUDIO_DIR: /data/audio
+      OUTPUT_DIR: /data/output
+      DEBUG_DIR: /data/debug
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - ./data:/data
+      - ./secrets/client_secrets.json:/run/secrets/client_secrets.json:ro
+    shm_size: "1gb"
+    security_opt:
+      - seccomp=unconfined
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

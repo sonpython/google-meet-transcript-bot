@@ -99,6 +99,8 @@ Infrastructure helpers live under `infra/`:
 - `infra/systemd/meeting-assistant.service` is the production service template.
 - `infra/systemd/install.sh` installs/enables the service after paths and env files are prepared.
 
+Docker deployment for the current host is documented in `docs/deployment.md`.
+
 ## Notes
 
 Google Meet automation has operational risk. The plan includes explicit fallback paths for self-hosted Vexa or Recall.ai if Playwright admission becomes unreliable.
