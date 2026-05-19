@@ -28,6 +28,12 @@ class AdminHandler(BaseHTTPRequestHandler):
                 return
             self._send_html(_admin_html())
             return
+        if parsed.path == "/admin/settings":
+            if not self._is_authorized(parsed):
+                self._send_html(_login_html())
+                return
+            self._send_html(_settings_html())
+            return
         if parsed.path.startswith("/admin/api/"):
             if not self._is_authorized(parsed):
                 self._send_json({"error": "unauthorized"}, status=401)
@@ -358,41 +364,54 @@ def _admin_html() -> str:
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Meeting Assistant Admin</title>{_style()}</head>
-<body><header><h1>Meeting Assistant</h1><div id="status">Loading</div></header>
-<main><section class="panel"><div class="panel-head"><h2>Settings</h2><button onclick="loadAll()">Refresh</button></div><div class="settings-row"><label>Audio retention days</label><input id="audioRetentionDays" type="number" min="0" max="3650" step="1"><button onclick="saveRetention()">Save</button><span id="settingsMsg" class="muted"></span></div></section>
-<section class="panel"><div class="panel-head"><h2>Upcoming</h2><button onclick="loadAll()">Refresh</button></div><div id="upcoming"></div></section>
+<body><header><h1>Meeting Assistant</h1><div class="header-actions"><div id="status">Loading</div><a class="button-link" href="/admin/settings">Settings</a></div></header>
+<main><section class="panel"><div class="panel-head"><h2>Upcoming</h2><div class="panel-actions"><button onclick="loadAll()">Refresh</button><button id="upcomingToggle" onclick="toggleUpcoming()">Show</button></div></div><div id="upcoming" class="collapsible collapsed"></div></section>
 <section class="grid"><div class="panel"><h2>History</h2><div class="filters"><input id="searchTitle" placeholder="Search title" oninput="renderMeetings()"><input id="dateFrom" type="date" onchange="renderMeetings()"><input id="dateTo" type="date" onchange="renderMeetings()"><button onclick="clearFilters()">Clear</button></div><div id="meetings"></div></div>
 <div class="panel detail"><h2>Meeting Detail</h2><div id="detail">Select a meeting.</div></div></section></main>
-<script>{_script()}</script></body></html>"""
+<script>{_script("dashboard")}</script></body></html>"""
+
+
+def _settings_html() -> str:
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Meeting Assistant Settings</title>{_style()}</head>
+<body><header><h1>Settings</h1><div class="header-actions"><div id="status">Loading</div><a class="button-link" href="/admin">Dashboard</a></div></header>
+<main><section class="panel settings-panel"><div class="panel-head"><h2>Retention</h2></div><div class="settings-row"><label>Audio retention days</label><input id="audioRetentionDays" type="number" min="0" max="3650" step="1"><button onclick="saveRetention()">Save</button><span id="settingsMsg" class="muted"></span></div></section></main>
+<script>{_script("settings")}</script></body></html>"""
 
 
 def _style() -> str:
     return """<style>
 *{box-sizing:border-box}body{margin:0;background:#070b12;color:#e5e7eb;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;color-scheme:dark}
-header{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#0b1220;color:#f8fafc;border-bottom:1px solid #1f2937}
+header{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#0b1220;color:#f8fafc;border-bottom:1px solid #1f2937}.header-actions,.panel-actions{display:flex;align-items:center;gap:8px}
 h1,h2,h3{margin:0} h1{font-size:18px} h2{font-size:15px}
 main{padding:18px;display:flex;flex-direction:column;gap:16px}.grid{display:grid;grid-template-columns:minmax(320px,430px) 1fr;gap:16px}
 .panel{background:#0f172a;border:1px solid #263244;border-radius:8px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.28)}.panel h2,.panel-head{padding:12px 14px;border-bottom:1px solid #263244}.panel-head{display:flex;align-items:center;justify-content:space-between}
-button,input{height:32px;border:1px solid #334155;background:#182235;color:#e5e7eb;border-radius:6px;padding:0 10px}button{cursor:pointer}button:hover{background:#22304a;border-color:#475569}input::placeholder{color:#64748b}.settings-row{display:grid;grid-template-columns:180px 120px auto 1fr;gap:10px;align-items:center;padding:12px 14px}.filters{display:grid;grid-template-columns:1fr 140px 140px auto;gap:8px;padding:12px 14px;border-bottom:1px solid #263244}.row{padding:10px 14px;border-bottom:1px solid #1f2937;cursor:pointer}.row:hover{background:#152033}
+button,input,.button-link{height:32px;border:1px solid #334155;background:#182235;color:#e5e7eb;border-radius:6px;padding:0 10px}button{cursor:pointer}button:hover,.button-link:hover{background:#22304a;border-color:#475569}.button-link{display:inline-flex;align-items:center;text-decoration:none}input::placeholder{color:#64748b}.settings-panel{max-width:760px}.settings-row{display:grid;grid-template-columns:180px 120px auto 1fr;gap:10px;align-items:center;padding:12px 14px}.filters{display:grid;grid-template-columns:1fr 140px 140px auto;gap:8px;padding:12px 14px;border-bottom:1px solid #263244}.row{padding:10px 14px;border-bottom:1px solid #1f2937;cursor:pointer}.row:hover{background:#152033}
 .muted{color:#94a3b8}.status{display:inline-block;border-radius:999px;padding:2px 8px;background:#1e293b;color:#c7d2fe;font-size:12px}.status.failed{background:#451a1a;color:#fecaca}.status.delivered{background:#102f20;color:#86efac}.status.no_one_joined{background:#1f2937;color:#cbd5e1}.status.recording,.status.processing{background:#422006;color:#fde68a}
+.collapsible.collapsed{display:none}
 .detail{min-height:520px}.detail-body{padding:14px}.kv{display:grid;grid-template-columns:160px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid #1f2937}.code-block{margin:12px 0 18px;border:1px solid #263244;border-radius:8px;overflow:hidden;background:#050914}.code-head{height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#111827;border-bottom:1px solid #263244}.code-head h3{font-size:13px}.copy-btn{height:28px;display:inline-flex;align-items:center;gap:6px}.copy-btn svg{width:15px;height:15px}pre{white-space:pre-wrap;background:#050914;color:#e5e7eb;margin:0;padding:12px;max-height:360px;overflow:auto}
 table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 10px;border-bottom:1px solid #1f2937}.login{min-height:100vh;display:grid;place-items:center;background:#070b12}.login-box{width:min(360px,calc(100vw - 32px));background:#0f172a;border:1px solid #263244;border-radius:8px;padding:20px;display:flex;flex-direction:column;gap:10px}.login-box input{height:36px;border:1px solid #334155;background:#070b12;color:#e5e7eb;border-radius:6px;padding:0 10px}.error{color:#fca5a5;margin:0}audio{width:min(560px,100%);height:34px;filter:invert(1) hue-rotate(180deg)}
 @media(max-width:900px){.grid{grid-template-columns:1fr}.filters,.settings-row{grid-template-columns:1fr 1fr}.settings-row label{grid-column:1/-1}}
 </style>"""
 
 
-def _script() -> str:
+def _script(page: str = "dashboard") -> str:
+    boot = "loadDashboard(); setInterval(loadStatus,15000);" if page == "dashboard" else "loadSettingsPage(); setInterval(loadStatus,15000);"
     return r"""
 async function api(path, opts={}){const r=await fetch('/admin/api/'+path,{cache:'no-store',...opts}); if(!r.ok) throw new Error(await r.text()); return r.json();}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function fmt(v){if(!v)return ''; if(/^\d{4}-\d{2}-\d{2}$/.test(String(v)))return v; try{return new Date(v).toLocaleString();}catch{return v;}}
 function badge(status){return `<span class="status ${esc(status)}">${esc(status)}</span>`}
 let allMeetings=[];
-async function loadAll(){await Promise.all([loadStatus(),loadSettings(),loadUpcoming(),loadMeetings()]);}
+async function loadAll(){await loadDashboard();}
+async function loadDashboard(){await Promise.all([loadStatus(),loadUpcoming(),loadMeetings()]);}
+async function loadSettingsPage(){await Promise.all([loadStatus(),loadSettings()]);}
 async function loadStatus(){const d=await api('status'); document.getElementById('status').textContent=`${d.state}: ${d.detail||''}`;}
 async function loadSettings(){const d=await api('settings'); document.getElementById('audioRetentionDays').value=d.settings.audio_retention_days;}
 async function saveRetention(){const days=Number(document.getElementById('audioRetentionDays').value); const msg=document.getElementById('settingsMsg'); const d=await api('settings/audio-retention',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({audio_retention_days:days})}); msg.textContent=`saved: ${d.settings.audio_retention_days} days`; setTimeout(()=>msg.textContent='',1600);}
 async function loadUpcoming(){const d=await api('upcoming'); const tracked=d.events.filter(e=>e.qualifying); const rows=tracked.map(e=>`<tr><td>${esc(e.title)}</td><td>${fmt(e.start?.dateTime||e.start?.date)}</td><td>${esc(e.meet_code||'')}</td><td>yes</td></tr>`).join(''); document.getElementById('upcoming').innerHTML=`<table><thead><tr><th>Title</th><th>Start</th><th>Meet</th><th>Tracked</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">No tracked upcoming meetings.</td></tr>'}</tbody></table>`;}
+function toggleUpcoming(){const panel=document.getElementById('upcoming'); const btn=document.getElementById('upcomingToggle'); const collapsed=panel.classList.toggle('collapsed'); btn.textContent=collapsed?'Show':'Hide';}
 async function loadMeetings(){const d=await api('meetings'); allMeetings=d.meetings; renderMeetings();}
 function renderMeetings(){const q=document.getElementById('searchTitle')?.value.trim().toLowerCase()||''; const from=document.getElementById('dateFrom')?.value||''; const to=document.getElementById('dateTo')?.value||''; const rows=allMeetings.filter(m=>{const title=String(m.title||'').toLowerCase(); const day=localDateKey(m.scheduled_start_utc); return (!q||title.includes(q))&&(!from||day>=from)&&(!to||day<=to);}); document.getElementById('meetings').innerHTML=rows.map(m=>`<div class="row" onclick="loadDetail('${esc(m.meet_code)}')"><strong>${esc(m.title)}</strong><div>${badge(m.status)} <span class="muted">${esc(m.meet_code)} · ${fmt(m.scheduled_start_utc)}</span></div></div>`).join('')||'<div class="row muted">No meetings.</div>';}
 function clearFilters(){document.getElementById('searchTitle').value=''; document.getElementById('dateFrom').value=''; document.getElementById('dateTo').value=''; renderMeetings();}
@@ -407,8 +426,7 @@ function fileLine(f){return f?.exists?`${esc(f.path)} <span class="muted">(${f.s
 function audioPlayer(m){const segments=m.files?.audio_segments||[]; if(!segments.length)return 'missing'; return segments.map((f,i)=>`<div><span class="muted">Segment ${i+1}</span><br><audio controls preload="none" src="/admin/api/meetings/${encodeURIComponent(m.meet_code)}/audio?index=${i}"></audio></div>`).join('');}
 function codeBlock(title,content){const id='code_'+Math.random().toString(36).slice(2); return `<section class="code-block"><div class="code-head"><h3>${esc(title)}</h3><button class="copy-btn" onclick="copyCode('${id}',this)" title="Copy all"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><span>Copy</span></button></div><pre id="${id}">${esc(content)}</pre></section>`}
 async function copyCode(id,button){const text=document.getElementById(id)?.textContent||''; await navigator.clipboard.writeText(text); const span=button.querySelector('span'); const old=span.textContent; span.textContent='Copied'; setTimeout(()=>span.textContent=old,1200);}
-loadAll(); setInterval(loadStatus,15000);
-"""
+""" + boot + "\n"
 
 
 def serve_forever() -> None:
