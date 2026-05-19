@@ -32,7 +32,8 @@ class Settings(BaseSettings):
 
     gemini_api_key: str | None = Field(default=None)
     gemini_model: str = Field(default="gemini-2.5-pro")
-    auto_purge_audio: bool = Field(default=True)
+    auto_purge_audio: bool = Field(default=False)
+    audio_retention_days: int = Field(default=10, ge=0)
     delivery_enabled: bool = Field(default=False)
 
     telegram_bot_token: str | None = Field(default=None)

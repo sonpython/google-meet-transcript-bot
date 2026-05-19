@@ -107,6 +107,7 @@ async def main() -> None:
         settings.bot_display_name,
         _build_result_processor(settings),
         settings.auto_purge_audio,
+        lambda: repo.get_audio_retention_days(settings.audio_retention_days),
     )
     runner = JobRunner(repo, meeting_session.run)
     runner.start()

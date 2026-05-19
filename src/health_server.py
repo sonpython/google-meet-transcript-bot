@@ -68,6 +68,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 self._send_json(STATUS.snapshot())
             elif suffix == "meetings":
                 self._send_json({"meetings": _list_meetings()})
+            elif suffix == "settings":
+                self._send_json({"settings": _admin_settings()})
             elif suffix.startswith("meetings/") and suffix.endswith("/audio"):
                 meet_code = unquote(suffix.removeprefix("meetings/").removesuffix("/audio"))
                 index = int(parse_qs(parsed.query).get("index", ["0"])[0] or "0")
@@ -83,6 +85,9 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def _handle_api_post(self, parsed) -> None:
         suffix = parsed.path.removeprefix("/admin/api/")
+        if suffix == "settings/audio-retention":
+            self._send_json(_update_audio_retention(self._read_json_body()))
+            return
         if suffix.startswith("meetings/") and suffix.endswith("/rejoin"):
             meet_code = unquote(suffix.removeprefix("meetings/").removesuffix("/rejoin"))
             self._send_json(_request_rejoin(meet_code))
@@ -115,6 +120,13 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _read_json_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0:
+            return {}
+        body = self.rfile.read(length).decode("utf-8")
+        return json.loads(body or "{}")
 
     def _send_html(self, html: str, status: int = 200) -> None:
         body = html.encode("utf-8")
@@ -153,6 +165,7 @@ def _list_meetings() -> list[dict]:
         rows = conn.execute(
             """
             SELECT meet_code, event_id, scheduled_start_utc, title, status,
+                   organizer, attendees,
                    transcript_path, summary_path, minutes_path, notes_path, audio_path,
                    attempts, last_error, delivered_at, created_at, updated_at
             FROM meetings
@@ -185,6 +198,8 @@ def _meeting_detail(meet_code: str) -> dict:
     meeting["metadata"] = {
         "meet_code": meeting.get("meet_code"),
         "event_id": meeting.get("event_id"),
+        "organizer": meeting.get("organizer"),
+        "attendees": meeting.get("attendees"),
         "status": meeting.get("status"),
         "scheduled_start_utc": meeting.get("scheduled_start_utc"),
         "delivered_at": meeting.get("delivered_at"),
@@ -205,6 +220,36 @@ def _request_rejoin(meet_code: str) -> dict:
             return {"error": f"meeting already {meeting['status']}"}
         command_id = repo.request_rejoin(meet_code)
         return {"ok": True, "command_id": command_id, "meet_code": meet_code}
+    finally:
+        conn.close()
+
+
+def _admin_settings() -> dict:
+    settings = load_settings()
+    conn = connect(settings.db_path)
+    try:
+        repo = MeetingsRepo(conn)
+        return {
+            "audio_retention_days": repo.get_audio_retention_days(settings.audio_retention_days),
+        }
+    finally:
+        conn.close()
+
+
+def _update_audio_retention(payload: dict) -> dict:
+    settings = load_settings()
+    raw_days = payload.get("audio_retention_days")
+    try:
+        days = int(raw_days)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("audio_retention_days must be an integer") from exc
+    if days < 0 or days > 3650:
+        raise ValueError("audio_retention_days must be between 0 and 3650")
+    conn = connect(settings.db_path)
+    try:
+        repo = MeetingsRepo(conn)
+        repo.set_setting("audio_retention_days", str(days))
+        return {"ok": True, "settings": {"audio_retention_days": days}}
     finally:
         conn.close()
 
@@ -269,7 +314,24 @@ def _upcoming_events() -> list[dict]:
 
 
 def _row_to_dict(row) -> dict:
-    return {key: row[key] for key in row.keys()}
+    data = {key: row[key] for key in row.keys()}
+    if "attendees" in data:
+        data["attendees"] = _decode_attendees(data.get("attendees"))
+    return data
+
+
+def _decode_attendees(value) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return [str(value)]
+    if isinstance(parsed, list):
+        return [str(item) for item in parsed]
+    return []
 
 
 def _path_or_none(value: str | None) -> Path | None:
@@ -297,8 +359,9 @@ def _admin_html() -> str:
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Meeting Assistant Admin</title>{_style()}</head>
 <body><header><h1>Meeting Assistant</h1><div id="status">Loading</div></header>
-<main><section class="panel"><div class="panel-head"><h2>Upcoming</h2><button onclick="loadAll()">Refresh</button></div><div id="upcoming"></div></section>
-<section class="grid"><div class="panel"><h2>History</h2><div id="meetings"></div></div>
+<main><section class="panel"><div class="panel-head"><h2>Settings</h2><button onclick="loadAll()">Refresh</button></div><div class="settings-row"><label>Audio retention days</label><input id="audioRetentionDays" type="number" min="0" max="3650" step="1"><button onclick="saveRetention()">Save</button><span id="settingsMsg" class="muted"></span></div></section>
+<section class="panel"><div class="panel-head"><h2>Upcoming</h2><button onclick="loadAll()">Refresh</button></div><div id="upcoming"></div></section>
+<section class="grid"><div class="panel"><h2>History</h2><div class="filters"><input id="searchTitle" placeholder="Search title" oninput="renderMeetings()"><input id="dateFrom" type="date" onchange="renderMeetings()"><input id="dateTo" type="date" onchange="renderMeetings()"><button onclick="clearFilters()">Clear</button></div><div id="meetings"></div></div>
 <div class="panel detail"><h2>Meeting Detail</h2><div id="detail">Select a meeting.</div></div></section></main>
 <script>{_script()}</script></body></html>"""
 
@@ -310,11 +373,11 @@ header{height:56px;display:flex;align-items:center;justify-content:space-between
 h1,h2,h3{margin:0} h1{font-size:18px} h2{font-size:15px}
 main{padding:18px;display:flex;flex-direction:column;gap:16px}.grid{display:grid;grid-template-columns:minmax(320px,430px) 1fr;gap:16px}
 .panel{background:#0f172a;border:1px solid #263244;border-radius:8px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.28)}.panel h2,.panel-head{padding:12px 14px;border-bottom:1px solid #263244}.panel-head{display:flex;align-items:center;justify-content:space-between}
-button{height:32px;border:1px solid #334155;background:#182235;color:#e5e7eb;border-radius:6px;padding:0 10px;cursor:pointer}button:hover{background:#22304a;border-color:#475569}.row{padding:10px 14px;border-bottom:1px solid #1f2937;cursor:pointer}.row:hover{background:#152033}
+button,input{height:32px;border:1px solid #334155;background:#182235;color:#e5e7eb;border-radius:6px;padding:0 10px}button{cursor:pointer}button:hover{background:#22304a;border-color:#475569}input::placeholder{color:#64748b}.settings-row{display:grid;grid-template-columns:180px 120px auto 1fr;gap:10px;align-items:center;padding:12px 14px}.filters{display:grid;grid-template-columns:1fr 140px 140px auto;gap:8px;padding:12px 14px;border-bottom:1px solid #263244}.row{padding:10px 14px;border-bottom:1px solid #1f2937;cursor:pointer}.row:hover{background:#152033}
 .muted{color:#94a3b8}.status{display:inline-block;border-radius:999px;padding:2px 8px;background:#1e293b;color:#c7d2fe;font-size:12px}.status.failed{background:#451a1a;color:#fecaca}.status.delivered{background:#102f20;color:#86efac}.status.no_one_joined{background:#1f2937;color:#cbd5e1}.status.recording,.status.processing{background:#422006;color:#fde68a}
 .detail{min-height:520px}.detail-body{padding:14px}.kv{display:grid;grid-template-columns:160px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid #1f2937}.code-block{margin:12px 0 18px;border:1px solid #263244;border-radius:8px;overflow:hidden;background:#050914}.code-head{height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#111827;border-bottom:1px solid #263244}.code-head h3{font-size:13px}.copy-btn{height:28px;display:inline-flex;align-items:center;gap:6px}.copy-btn svg{width:15px;height:15px}pre{white-space:pre-wrap;background:#050914;color:#e5e7eb;margin:0;padding:12px;max-height:360px;overflow:auto}
 table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 10px;border-bottom:1px solid #1f2937}.login{min-height:100vh;display:grid;place-items:center;background:#070b12}.login-box{width:min(360px,calc(100vw - 32px));background:#0f172a;border:1px solid #263244;border-radius:8px;padding:20px;display:flex;flex-direction:column;gap:10px}.login-box input{height:36px;border:1px solid #334155;background:#070b12;color:#e5e7eb;border-radius:6px;padding:0 10px}.error{color:#fca5a5;margin:0}audio{width:min(560px,100%);height:34px;filter:invert(1) hue-rotate(180deg)}
-@media(max-width:900px){.grid{grid-template-columns:1fr}}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.filters,.settings-row{grid-template-columns:1fr 1fr}.settings-row label{grid-column:1/-1}}
 </style>"""
 
 
@@ -322,17 +385,24 @@ def _script() -> str:
     return r"""
 async function api(path, opts={}){const r=await fetch('/admin/api/'+path,{cache:'no-store',...opts}); if(!r.ok) throw new Error(await r.text()); return r.json();}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function fmt(v){if(!v)return ''; try{return new Date(v).toLocaleString();}catch{return v;}}
+function fmt(v){if(!v)return ''; if(/^\d{4}-\d{2}-\d{2}$/.test(String(v)))return v; try{return new Date(v).toLocaleString();}catch{return v;}}
 function badge(status){return `<span class="status ${esc(status)}">${esc(status)}</span>`}
-async function loadAll(){await Promise.all([loadStatus(),loadUpcoming(),loadMeetings()]);}
+let allMeetings=[];
+async function loadAll(){await Promise.all([loadStatus(),loadSettings(),loadUpcoming(),loadMeetings()]);}
 async function loadStatus(){const d=await api('status'); document.getElementById('status').textContent=`${d.state}: ${d.detail||''}`;}
-async function loadUpcoming(){const d=await api('upcoming'); const rows=d.events.map(e=>`<tr><td>${esc(e.title)}</td><td>${fmt(e.start?.dateTime||e.start?.date)}</td><td>${esc(e.meet_code||'')}</td><td>${e.qualifying?'yes':'no'}</td></tr>`).join(''); document.getElementById('upcoming').innerHTML=`<table><thead><tr><th>Title</th><th>Start</th><th>Meet</th><th>Tracked</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">No upcoming events.</td></tr>'}</tbody></table>`;}
-async function loadMeetings(){const d=await api('meetings'); document.getElementById('meetings').innerHTML=d.meetings.map(m=>`<div class="row" onclick="loadDetail('${esc(m.meet_code)}')"><strong>${esc(m.title)}</strong><div>${badge(m.status)} <span class="muted">${esc(m.meet_code)} · ${fmt(m.scheduled_start_utc)}</span></div></div>`).join('')||'<div class="row muted">No meetings.</div>';}
+async function loadSettings(){const d=await api('settings'); document.getElementById('audioRetentionDays').value=d.settings.audio_retention_days;}
+async function saveRetention(){const days=Number(document.getElementById('audioRetentionDays').value); const msg=document.getElementById('settingsMsg'); const d=await api('settings/audio-retention',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({audio_retention_days:days})}); msg.textContent=`saved: ${d.settings.audio_retention_days} days`; setTimeout(()=>msg.textContent='',1600);}
+async function loadUpcoming(){const d=await api('upcoming'); const tracked=d.events.filter(e=>e.qualifying); const rows=tracked.map(e=>`<tr><td>${esc(e.title)}</td><td>${fmt(e.start?.dateTime||e.start?.date)}</td><td>${esc(e.meet_code||'')}</td><td>yes</td></tr>`).join(''); document.getElementById('upcoming').innerHTML=`<table><thead><tr><th>Title</th><th>Start</th><th>Meet</th><th>Tracked</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">No tracked upcoming meetings.</td></tr>'}</tbody></table>`;}
+async function loadMeetings(){const d=await api('meetings'); allMeetings=d.meetings; renderMeetings();}
+function renderMeetings(){const q=document.getElementById('searchTitle')?.value.trim().toLowerCase()||''; const from=document.getElementById('dateFrom')?.value||''; const to=document.getElementById('dateTo')?.value||''; const rows=allMeetings.filter(m=>{const title=String(m.title||'').toLowerCase(); const day=localDateKey(m.scheduled_start_utc); return (!q||title.includes(q))&&(!from||day>=from)&&(!to||day<=to);}); document.getElementById('meetings').innerHTML=rows.map(m=>`<div class="row" onclick="loadDetail('${esc(m.meet_code)}')"><strong>${esc(m.title)}</strong><div>${badge(m.status)} <span class="muted">${esc(m.meet_code)} · ${fmt(m.scheduled_start_utc)}</span></div></div>`).join('')||'<div class="row muted">No meetings.</div>';}
+function clearFilters(){document.getElementById('searchTitle').value=''; document.getElementById('dateFrom').value=''; document.getElementById('dateTo').value=''; renderMeetings();}
+function localDateKey(v){if(!v)return ''; const d=new Date(v); if(Number.isNaN(d.getTime()))return ''; const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return `${d.getFullYear()}-${m}-${day}`;}
 async function loadDetail(code){const d=await api('meetings/'+encodeURIComponent(code)); const m=d.meeting; const files=m.files||{}; document.getElementById('detail').innerHTML=`<div class="detail-body"><h3>${esc(m.title)}</h3><p><button onclick="rejoin('${esc(m.meet_code)}')">Rejoin</button></p>
-${kv('Status',badge(m.status))}${kv('Meet code',esc(m.meet_code))}${kv('Event ID',esc(m.event_id))}${kv('Scheduled',fmt(m.scheduled_start_utc))}${kv('Delivered',fmt(m.delivered_at))}${kv('Audio',fileLine(files.audio))}${kv('Listen',audioPlayer(m))}${kv('Notes',fileLine(files.notes))}${kv('Minutes',fileLine(files.minutes))}${kv('Transcript',fileLine(files.transcript))}${m.last_error?kv('Error',esc(m.last_error)):''}
+${kv('Status',badge(m.status))}${kv('Meet code',esc(m.meet_code))}${kv('Event ID',esc(m.event_id))}${kv('Host',esc(m.organizer||''))}${kv('Attendees',attendeeList(m.attendees))}${kv('Scheduled',fmt(m.scheduled_start_utc))}${kv('Delivered',fmt(m.delivered_at))}${kv('Audio',fileLine(files.audio))}${kv('Listen',audioPlayer(m))}${kv('Notes',fileLine(files.notes))}${kv('Minutes',fileLine(files.minutes))}${kv('Transcript',fileLine(files.transcript))}${m.last_error?kv('Error',esc(m.last_error)):''}
 ${codeBlock('Summary',files.summary?.content||'')}${codeBlock('Meeting Minutes',files.minutes?.content||'')}${codeBlock('Transcript',files.transcript?.content||'')}${codeBlock('Notes',files.notes?.content||'')}</div>`;}
 async function rejoin(code){const result=await api('meetings/'+encodeURIComponent(code)+'/rejoin',{method:'POST'}); if(result.error){alert(result.error); return;} alert('Rejoin queued'); await loadAll(); await loadDetail(code);}
 function kv(k,v){return `<div class="kv"><div class="muted">${k}</div><div>${v}</div></div>`}
+function attendeeList(v){if(Array.isArray(v)&&v.length)return v.map(esc).join('<br>'); return 'missing';}
 function fileLine(f){return f?.exists?`${esc(f.path)} <span class="muted">(${f.size} bytes)</span>`:'missing'}
 function audioPlayer(m){const segments=m.files?.audio_segments||[]; if(!segments.length)return 'missing'; return segments.map((f,i)=>`<div><span class="muted">Segment ${i+1}</span><br><audio controls preload="none" src="/admin/api/meetings/${encodeURIComponent(m.meet_code)}/audio?index=${i}"></audio></div>`).join('');}
 function codeBlock(title,content){const id='code_'+Math.random().toString(36).slice(2); return `<section class="code-block"><div class="code-head"><h3>${esc(title)}</h3><button class="copy-btn" onclick="copyCode('${id}',this)" title="Copy all"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><span>Copy</span></button></div><pre id="${id}">${esc(content)}</pre></section>`}

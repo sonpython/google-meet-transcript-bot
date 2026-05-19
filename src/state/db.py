@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS meetings (
     event_id TEXT NOT NULL,
     scheduled_start_utc TEXT NOT NULL,
     title TEXT NOT NULL,
+    organizer TEXT,
+    attendees TEXT,
     status TEXT NOT NULL,
     transcript_path TEXT,
     summary_path TEXT,
@@ -36,6 +38,12 @@ CREATE TABLE IF NOT EXISTS admin_commands (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -47,6 +55,8 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
     _ensure_column(conn, "meetings", "minutes_path", "TEXT")
+    _ensure_column(conn, "meetings", "organizer", "TEXT")
+    _ensure_column(conn, "meetings", "attendees", "TEXT")
     return conn
 
 

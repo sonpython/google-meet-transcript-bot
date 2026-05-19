@@ -1,4 +1,6 @@
 import os
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import structlog
@@ -20,6 +22,7 @@ class MeetingSession:
         display_name: str,
         process_result,
         auto_purge_audio: bool = True,
+        audio_retention_days: int | Callable[[], int] = 10,
     ) -> None:
         self.repo = repo
         self.browser_factory = browser_factory
@@ -28,6 +31,7 @@ class MeetingSession:
         self.display_name = display_name
         self.process_result = process_result
         self.auto_purge_audio = auto_purge_audio
+        self.audio_retention_days = audio_retention_days
         self.log = structlog.get_logger(__name__)
 
     async def run(self, meeting: MeetingEvent) -> None:
@@ -47,8 +51,7 @@ class MeetingSession:
             final_path = recorder.stop()
             if reason == "no_one_joined":
                 self.repo.mark_status(meeting.meet_code, "no_one_joined", None, audio_path=str(final_path))
-                if self.auto_purge_audio:
-                    os.remove(final_path)
+                self._cleanup_audio()
                 return
             result = MeetingResult(
                 meeting.meet_code,
@@ -62,8 +65,7 @@ class MeetingSession:
             output_paths = await self.process_result(result)
             notes_path, extra_paths = _normalize_output_paths(output_paths)
             self.repo.mark_delivered(meeting.meet_code, str(notes_path), **extra_paths)
-            if self.auto_purge_audio:
-                os.remove(final_path)
+            self._cleanup_audio()
         except Exception as exc:
             self.log.exception("meeting_session_failed", meet_code=meeting.meet_code)
             if recorder.is_running():
@@ -72,6 +74,27 @@ class MeetingSession:
         finally:
             if session:
                 await session.close()
+
+    def _retention_days(self) -> int:
+        if callable(self.audio_retention_days):
+            return max(0, int(self.audio_retention_days()))
+        return max(0, int(self.audio_retention_days))
+
+    def _cleanup_audio(self) -> None:
+        days = self._retention_days()
+        if days <= 0:
+            cutoff = datetime.now(UTC)
+        else:
+            cutoff = datetime.now(UTC) - timedelta(days=days)
+        if not self.audio_dir.exists():
+            return
+        for path in self.audio_dir.glob("*.opus"):
+            modified = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+            if days <= 0 or modified < cutoff:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
 
 
 def _normalize_output_paths(output_paths) -> tuple[Path, dict[str, str]]:

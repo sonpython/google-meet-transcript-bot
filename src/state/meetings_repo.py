@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import json
 from sqlite3 import Connection
 
 from src.models.meeting_event import MeetingEvent
@@ -18,19 +19,33 @@ class MeetingsRepo:
             self.conn.execute(
                 """
                 UPDATE meetings
-                SET event_id=?, scheduled_start_utc=?, title=?, updated_at=CURRENT_TIMESTAMP
+                SET event_id=?, scheduled_start_utc=?, title=?, organizer=?, attendees=?, updated_at=CURRENT_TIMESTAMP
                 WHERE meet_code=?
                 """,
-                (meeting.event_id, meeting.start_utc.isoformat(), meeting.title, meeting.meet_code),
+                (
+                    meeting.event_id,
+                    meeting.start_utc.isoformat(),
+                    meeting.title,
+                    meeting.organizer,
+                    json.dumps(list(meeting.attendees), ensure_ascii=False),
+                    meeting.meet_code,
+                ),
             )
             self.conn.commit()
             return False
         self.conn.execute(
             """
-            INSERT INTO meetings (meet_code, event_id, scheduled_start_utc, title, status)
-            VALUES (?, ?, ?, ?, 'scheduled')
+            INSERT INTO meetings (meet_code, event_id, scheduled_start_utc, title, organizer, attendees, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'scheduled')
             """,
-            (meeting.meet_code, meeting.event_id, meeting.start_utc.isoformat(), meeting.title),
+            (
+                meeting.meet_code,
+                meeting.event_id,
+                meeting.start_utc.isoformat(),
+                meeting.title,
+                meeting.organizer,
+                json.dumps(list(meeting.attendees), ensure_ascii=False),
+            ),
         )
         self.conn.commit()
         return True
@@ -112,3 +127,25 @@ class MeetingsRepo:
             (status, error, command_id),
         )
         self.conn.commit()
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        row = self.conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO app_settings (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+            """,
+            (key, value),
+        )
+        self.conn.commit()
+
+    def get_audio_retention_days(self, default: int = 10) -> int:
+        value = self.get_setting("audio_retention_days", str(default))
+        try:
+            return max(0, int(value or default))
+        except ValueError:
+            return default
