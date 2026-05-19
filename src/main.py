@@ -12,6 +12,8 @@ from src.bot.storage_state_store import StorageStateStore
 from src.calendar_watcher.client import CalendarClient
 from src.calendar_watcher.watcher import CalendarWatcher
 from src.config import load_settings
+from src.discord_sender.client import DiscordClient
+from src.discord_sender.delivery import DiscordDelivery
 from src.gemini.client import GeminiClient
 from src.gemini.pipeline import GeminiPipeline
 from src.health.daily_check import DailyHealthCheck, next_health_check_time
@@ -45,7 +47,11 @@ def _build_result_processor(settings):
             raise RuntimeError("GEMINI_API_KEY is required for meeting processing")
         gemini = GeminiPipeline(GeminiClient(settings.gemini_api_key, settings.gemini_model), settings.output_dir)
         transcript_path, summary_path, notes_path = await gemini.process(result)
-        if settings.telegram_bot_token and settings.telegram_chat_id:
+        if settings.discord_bot_token and settings.discord_channel_id:
+            discord = DiscordDelivery(DiscordClient(settings.discord_bot_token, settings.discord_channel_id))
+            summary = summary_path.read_text()
+            await discord.deliver(result, notes_path, summary)
+        elif settings.telegram_bot_token and settings.telegram_chat_id:
             telegram = TelegramDelivery(TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id))
             summary = summary_path.read_text()
             await telegram.deliver(result, notes_path, summary)
@@ -65,10 +71,22 @@ async def main() -> None:
     gemini_client = GeminiClient(settings.gemini_api_key, settings.gemini_model) if settings.gemini_api_key else None
     telegram_client = (
         TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
-        if settings.telegram_bot_token and settings.telegram_chat_id
+        if not settings.discord_bot_token and settings.telegram_bot_token and settings.telegram_chat_id
         else None
     )
-    validation = await validate_startup(settings, token_store, storage_store, gemini_client, telegram_client)
+    discord_client = (
+        DiscordClient(settings.discord_bot_token, settings.discord_channel_id)
+        if settings.discord_bot_token and settings.discord_channel_id
+        else None
+    )
+    validation = await validate_startup(
+        settings,
+        token_store,
+        storage_store,
+        gemini_client,
+        telegram_client,
+        discord_client,
+    )
     if not validation.ok:
         log.warning("startup_validation_failed", failures=validation.failures)
     auth = OAuthUserAuth(
@@ -90,8 +108,8 @@ async def main() -> None:
     )
     runner = JobRunner(repo, meeting_session.run)
     runner.start()
-    if gemini_client or telegram_client:
-        daily_check = DailyHealthCheck(telegram_client, gemini_client)
+    if gemini_client or telegram_client or discord_client:
+        daily_check = DailyHealthCheck(discord_client or telegram_client, gemini_client)
         runner.scheduler.add_job(
             daily_check.run,
             "interval",

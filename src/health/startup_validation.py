@@ -7,7 +7,14 @@ class ValidationResult:
     failures: tuple[str, ...]
 
 
-async def validate_startup(settings, token_store, storage_state_store, gemini_client=None, telegram_client=None):
+async def validate_startup(
+    settings,
+    token_store,
+    storage_state_store,
+    gemini_client=None,
+    telegram_client=None,
+    discord_client=None,
+):
     failures: list[str] = []
     if not token_store.exists():
         failures.append("calendar token missing")
@@ -23,4 +30,9 @@ async def validate_startup(settings, token_store, storage_state_store, gemini_cl
             await telegram_client.send_text("startup validation")
         except Exception:
             failures.append("telegram ping failed")
+    if settings.discord_bot_token and discord_client:
+        try:
+            await discord_client.send_text("startup validation")
+        except Exception:
+            failures.append("discord ping failed")
     return ValidationResult(not failures, tuple(failures))

@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = Field(default=None)
     telegram_chat_id: str | None = Field(default=None)
 
+    discord_bot_token: str | None = Field(default=None)
+    discord_channel_id: str | None = Field(default=None)
+
     log_level: str = Field(default="INFO")
 
 
