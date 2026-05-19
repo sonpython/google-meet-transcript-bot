@@ -5,6 +5,7 @@ import pytest
 
 from src.gemini.audio_chunker import AudioChunk
 from src.gemini.pipeline import GeminiPipeline
+from src.gemini.summarizer import sanitize_minutes
 from src.gemini.transcriber import Transcriber, has_hallucination_loop
 from src.models.meeting_result import MeetingResult
 
@@ -30,7 +31,7 @@ class FakeGeminiClient:
 
     async def generate_text(self, prompt: str) -> str:
         self.text_calls.append(prompt)
-        if "Meeting Minutes" in prompt:
+        if "## Thông Tin Cuộc Họp" in prompt:
             return "## Thông Tin Cuộc Họp\nMinutes content"
         return "## TL;DR\nSummary content"
 
@@ -87,3 +88,16 @@ def test_pipeline_writes_outputs(tmp_path: Path) -> None:
     assert "# Weekly Sync" in notes_path.read_text()
     assert "## Meeting Minutes" in notes_path.read_text()
     assert "- Meet code: abc-defg-hij" in notes_path.read_text()
+
+
+def test_sanitize_minutes_removes_model_preamble() -> None:
+    raw = (
+        "Chắc chắn rồi, đây là biên bản cuộc họp (Meeting Minutes) từ transcript bạn đã cung cấp.\n\n"
+        "## Thông Tin Cuộc Họp\n"
+        "- Chủ đề: Demo\n"
+    )
+
+    cleaned = sanitize_minutes(raw)
+
+    assert cleaned.startswith("## Thông Tin Cuộc Họp")
+    assert "Chắc chắn rồi" not in cleaned
