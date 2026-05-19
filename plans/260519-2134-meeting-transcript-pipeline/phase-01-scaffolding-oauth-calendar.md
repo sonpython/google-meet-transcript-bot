@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Scaffolding + OAuth + Calendar Watcher"
-status: pending
+status: in_progress
 priority: P1
 effort: "1d"
 dependencies: []
@@ -59,6 +59,9 @@ src/
 - `.env.example`
 - `README.md`
 
+**Created:**
+- `tests/test_calendar_classifier.py`
+
 ## Implementation Steps
 
 1. Init `uv` project: `uv init --python 3.12`, add deps: `google-auth-oauthlib`, `google-api-python-client`, `pydantic-settings`, `structlog`, `cryptography`
@@ -83,7 +86,7 @@ src/
 - [ ] `uv run python -m src.main` starts, OAuth first-run completes
 - [ ] Token stored encrypted, survives restart (refresh works)
 - [ ] Watcher logs qualifying events from real calendar
-- [ ] Unit tests for `classifier.is_qualifying` (5 fixtures: organizer/attendee/declined/no-meet/external)
+- [x] Unit tests for `classifier.is_qualifying` (5 fixtures: organizer/attendee/declined/no-meet/external)
 
 ## Risk Assessment
 

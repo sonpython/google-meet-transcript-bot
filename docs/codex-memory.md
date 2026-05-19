@@ -31,8 +31,16 @@ Done:
   - Telegram delivery changed to a combined notes file.
   - YAGNI cuts applied for SQLAlchemy job store, separate audio chunker, `/health`, and external age dependency.
 
+- Phase 1 implementation started:
+  - Python project scaffold added.
+  - Fernet token store added.
+  - Google OAuth user flow added.
+  - Calendar API client, classifier, watcher, and entrypoint added.
+  - Classifier tests cover organizer, attendee, declined, no-Meet, external, and conferenceData video-entry cases.
+
 Next:
 
-- Start Phase 1 implementation when requested.
+- Run Phase 1 against a real Google OAuth client and real calendar.
+- Start Phase 2 SQLite state and APScheduler when requested.
 - Keep `docs/session-sync.md` updated after major changes.
 - On explicit "export memory", commit and push current memory/docs state after verification.

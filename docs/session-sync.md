@@ -24,7 +24,7 @@ Files touched or created:
 
 Next handoff target:
 
-- Implement Phase 1 scaffolding and Calendar watcher.
+- Validate Phase 1 with real Google OAuth credentials and then implement Phase 2.
 
 Verification before push:
 

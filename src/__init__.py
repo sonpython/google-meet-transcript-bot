@@ -1,0 +1,1 @@
+"""Google Meet transcript bot."""

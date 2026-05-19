@@ -1,6 +1,6 @@
 ---
 title: "Meeting Transcript Pipeline (Playwright Bot)"
-status: pending
+status: in_progress
 priority: P1
 created: 2026-05-19
 source: brainstorm
@@ -51,7 +51,7 @@ Calendar Watcher → Bot Orchestrator (Playwright + PipeWire + FFmpeg in LXC)
 
 | # | Phase | Effort | Status |
 |---|---|---|---|
-| 1 | [Scaffolding + OAuth + Calendar Watcher](phase-01-scaffolding-oauth-calendar.md) | 1d | pending |
+| 1 | [Scaffolding + OAuth + Calendar Watcher](phase-01-scaffolding-oauth-calendar.md) | 1d | in_progress |
 | 2 | [SQLite state + APScheduler](phase-02-sqlite-state-scheduler.md) | 0.5d | pending |
 | 3 | [Playwright login + storageState](phase-03-playwright-login-storagestate.md) | 1d | pending |
 | 4 | [Playwright Meet join + exit handoff](phase-04-playwright-meet-join.md) | 2.5d | pending |

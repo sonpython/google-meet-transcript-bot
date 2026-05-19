@@ -1,6 +1,6 @@
 # Google Meet Transcript Bot
 
-Status: in planning.
+Status: Phase 1 in progress.
 
 This project plans a self-hosted Google Meet transcript pipeline for Workspace meetings:
 
@@ -30,7 +30,29 @@ The implementation plan lives in:
 - `plans/reports/brainstorm-260519-2103-meeting-transcript-pipeline.md`
 - `plans/reports/red-team-260519-meeting-bot.md`
 
-The plan is intentionally still pre-implementation. The first implementation phase is project scaffolding plus Google Calendar OAuth.
+Phase 1 scaffolding and the Google Calendar watcher are implemented. Later bot/audio/Gemini/Telegram phases are still planning docs.
+
+## Development
+
+Install dependencies:
+
+```bash
+uv sync --dev
+```
+
+Run tests:
+
+```bash
+uv run pytest
+```
+
+Run the watcher after configuring `.env` and `client_secrets.json`:
+
+```bash
+uv run python -m src.main
+```
+
+The first run opens a browser for Google OAuth and stores the refresh token encrypted at `TOKEN_STORE_PATH`.
 
 ## Required Accounts And Secrets
 

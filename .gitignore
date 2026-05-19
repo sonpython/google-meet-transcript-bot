@@ -42,6 +42,7 @@ yarn-error.log*
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+uv.lock
 
 # semantic-release
 .nyc_output
