@@ -47,8 +47,13 @@ class MeetingSession:
                 return
             audio_path = recorder.start(meeting.meet_code)
             self.repo.mark_status(meeting.meet_code, "recording", audio_path=str(audio_path))
-            reason, participants, duration = await MeetMonitor(session.page).run_until_exit()
+            reason, participants, duration = await MeetMonitor(
+                session.page,
+                should_force_exit=lambda: self._claim_force_out(meeting.meet_code),
+            ).run_until_exit()
             final_path = recorder.stop()
+            await session.close()
+            session = None
             if reason == "no_one_joined":
                 self.repo.mark_status(meeting.meet_code, "no_one_joined", None, audio_path=str(final_path))
                 self._cleanup_audio()
@@ -74,6 +79,13 @@ class MeetingSession:
         finally:
             if session:
                 await session.close()
+
+    def _claim_force_out(self, meet_code: str) -> bool:
+        command = self.repo.claim_pending_force_out(meet_code)
+        if not command:
+            return False
+        self.repo.complete_command(command["id"], "done")
+        return True
 
     def _retention_days(self) -> int:
         if callable(self.audio_retention_days):

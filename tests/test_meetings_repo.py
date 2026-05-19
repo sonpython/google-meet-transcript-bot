@@ -49,3 +49,15 @@ def test_mark_status_updates_fields(tmp_path: Path) -> None:
     row = repo.get("abc-defg-hij")
     assert row["status"] == "processing"
     assert row["audio_path"] == "/tmp/audio.opus"
+
+
+def test_force_out_command_round_trip(tmp_path: Path) -> None:
+    repo = MeetingsRepo(connect(tmp_path / "state.db"))
+    repo.upsert(_event())
+
+    command_id = repo.request_force_out("abc-defg-hij")
+    command = repo.claim_pending_force_out("abc-defg-hij")
+
+    assert command["id"] == command_id
+    assert command["command"] == "force_out"
+    assert not repo.claim_pending_force_out("abc-defg-hij")

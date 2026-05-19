@@ -7,6 +7,7 @@ from src.bot.participant_tracker import ParticipantTracker
 
 Clock = Callable[[], datetime]
 Sleep = Callable[[int], Awaitable[None]]
+ForceExit = Callable[[], Awaitable[bool] | bool]
 
 
 class MeetMonitor:
@@ -20,6 +21,7 @@ class MeetMonitor:
         max_duration: int = 4 * 3600,
         clock: Clock | None = None,
         sleep: Sleep | None = None,
+        should_force_exit: ForceExit | None = None,
     ) -> None:
         self.page = page
         self.poll_seconds = poll_seconds
@@ -29,6 +31,7 @@ class MeetMonitor:
         self.max_duration = max_duration
         self.clock = clock or (lambda: datetime.now(UTC))
         self.sleep = sleep or asyncio.sleep
+        self.should_force_exit = should_force_exit
         self.detector = ExitDetector()
         self.participants = ParticipantTracker()
 
@@ -42,6 +45,8 @@ class MeetMonitor:
             if (now - started).total_seconds() >= self.max_duration:
                 return "hard_cap", tuple(last_participants), int((now - started).total_seconds())
             last_participants = await self.participants.get_participants(self.page)
+            if await self._should_force_exit():
+                return "force_out", tuple(last_participants), int((now - started).total_seconds())
             if len(last_participants) > 1:
                 had_company = True
             if not had_company and (now - started).total_seconds() >= self.no_one_joined_timeout_seconds:
@@ -57,3 +62,11 @@ class MeetMonitor:
             else:
                 alone_since = None
             await self.sleep(self.poll_seconds)
+
+    async def _should_force_exit(self) -> bool:
+        if not self.should_force_exit:
+            return False
+        result = self.should_force_exit()
+        if hasattr(result, "__await__"):
+            return bool(await result)
+        return bool(result)

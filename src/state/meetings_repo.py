@@ -97,6 +97,35 @@ class MeetingsRepo:
         self.conn.commit()
         return int(cur.lastrowid)
 
+    def request_force_out(self, meet_code: str) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO admin_commands (command, meet_code, status)
+            VALUES ('force_out', ?, 'pending')
+            """,
+            (meet_code,),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def claim_pending_force_out(self, meet_code: str):
+        row = self.conn.execute(
+            """
+            SELECT * FROM admin_commands
+            WHERE command='force_out' AND meet_code=? AND status='pending'
+            ORDER BY created_at
+            LIMIT 1
+            """,
+            (meet_code,),
+        ).fetchone()
+        if row:
+            self.conn.execute(
+                "UPDATE admin_commands SET status='running', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (row["id"],),
+            )
+            self.conn.commit()
+        return row
+
     def claim_pending_rejoins(self, limit: int = 5) -> list:
         rows = list(
             self.conn.execute(

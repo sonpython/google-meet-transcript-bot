@@ -98,6 +98,10 @@ class AdminHandler(BaseHTTPRequestHandler):
             meet_code = unquote(suffix.removeprefix("meetings/").removesuffix("/rejoin"))
             self._send_json(_request_rejoin(meet_code))
             return
+        if suffix.startswith("meetings/") and suffix.endswith("/force-out"):
+            meet_code = unquote(suffix.removeprefix("meetings/").removesuffix("/force-out"))
+            self._send_json(_request_force_out(meet_code))
+            return
         self._send_json({"error": "not found"}, status=404)
 
     def _is_authorized(self, parsed) -> bool:
@@ -225,6 +229,22 @@ def _request_rejoin(meet_code: str) -> dict:
         if meeting["status"] in {"joining", "recording", "processing"}:
             return {"error": f"meeting already {meeting['status']}"}
         command_id = repo.request_rejoin(meet_code)
+        return {"ok": True, "command_id": command_id, "meet_code": meet_code}
+    finally:
+        conn.close()
+
+
+def _request_force_out(meet_code: str) -> dict:
+    settings = load_settings()
+    conn = connect(settings.db_path)
+    try:
+        repo = MeetingsRepo(conn)
+        meeting = repo.get(meet_code)
+        if not meeting:
+            return {"error": "meeting not found"}
+        if meeting["status"] != "recording":
+            return {"error": f"meeting is {meeting['status']}, not recording"}
+        command_id = repo.request_force_out(meet_code)
         return {"ok": True, "command_id": command_id, "meet_code": meet_code}
     finally:
         conn.close()
@@ -395,7 +415,7 @@ header{height:56px;display:flex;align-items:center;justify-content:space-between
 h1,h2,h3{margin:0} h1{font-size:18px} h2{font-size:15px}
 main{padding:18px;display:flex;flex-direction:column;gap:16px}.grid{display:grid;grid-template-columns:minmax(320px,430px) 1fr;gap:16px}
 .panel{background:#0f172a;border:1px solid #263244;border-radius:8px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.28)}.panel h2,.panel-head{padding:12px 14px;border-bottom:1px solid #263244}.panel-head{display:flex;align-items:center;justify-content:space-between}
-button,input,.button-link{height:32px;border:1px solid #334155;background:#182235;color:#e5e7eb;border-radius:6px;padding:0 10px;touch-action:manipulation}button{cursor:pointer}button:hover,.button-link:hover{background:#22304a;border-color:#475569}button:focus-visible,input:focus-visible,.button-link:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}.button-link{display:inline-flex;align-items:center;text-decoration:none}input::placeholder{color:#64748b}.service-status{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 9px;border:1px solid #334155;background:#111827;color:#e5e7eb;font-size:12px;line-height:1.3}.service-status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}.service-status.running{background:#102f20;border-color:#166534;color:#86efac}.service-status.degraded{background:#422006;border-color:#a16207;color:#fde68a}.service-status.failed{background:#451a1a;border-color:#991b1b;color:#fecaca}.service-status.starting{background:#172554;border-color:#1d4ed8;color:#93c5fd}.service-status.idle{background:#1f2937;border-color:#475569;color:#cbd5e1}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.settings-panel{max-width:760px}.settings-row{display:grid;grid-template-columns:180px 120px auto 1fr;gap:10px;align-items:center;padding:12px 14px}.filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,126px) minmax(112px,126px) auto;gap:8px;padding:12px 14px;border-bottom:1px solid #263244}.filters input{min-width:0}.filters input[type=date]{padding:0 6px;font-size:13px}.row{padding:10px 14px;border-bottom:1px solid #1f2937;cursor:pointer}.row:hover{background:#152033}
+button,input,.button-link{height:32px;border:1px solid #334155;background:#182235;color:#e5e7eb;border-radius:6px;padding:0 10px;touch-action:manipulation}button{cursor:pointer}button:hover,.button-link:hover{background:#22304a;border-color:#475569}button.danger{background:#451a1a;border-color:#7f1d1d;color:#fecaca}button.danger:hover{background:#5f1d1d;border-color:#991b1b}button:focus-visible,input:focus-visible,.button-link:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}.button-link{display:inline-flex;align-items:center;text-decoration:none}input::placeholder{color:#64748b}.service-status{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 9px;border:1px solid #334155;background:#111827;color:#e5e7eb;font-size:12px;line-height:1.3}.service-status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}.service-status.running{background:#102f20;border-color:#166534;color:#86efac}.service-status.degraded{background:#422006;border-color:#a16207;color:#fde68a}.service-status.failed{background:#451a1a;border-color:#991b1b;color:#fecaca}.service-status.starting{background:#172554;border-color:#1d4ed8;color:#93c5fd}.service-status.idle{background:#1f2937;border-color:#475569;color:#cbd5e1}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.settings-panel{max-width:760px}.settings-row{display:grid;grid-template-columns:180px 120px auto 1fr;gap:10px;align-items:center;padding:12px 14px}.filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,126px) minmax(112px,126px) auto;gap:8px;padding:12px 14px;border-bottom:1px solid #263244}.filters input{min-width:0}.filters input[type=date]{padding:0 6px;font-size:13px}.row{padding:10px 14px;border-bottom:1px solid #1f2937;cursor:pointer}.row:hover{background:#152033}
 .pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;border-top:1px solid #263244}.pagination .pager-actions{display:flex;gap:8px}.pagination button:disabled{opacity:.45;cursor:not-allowed}
 .muted{color:#94a3b8}.status{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 8px;background:#1e293b;color:#c7d2fe;font-size:12px;line-height:1.35}.status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}.status.failed{background:#451a1a;color:#fecaca}.status.delivered{background:#102f20;color:#86efac}.status.no_one_joined{background:#1f2937;color:#cbd5e1}.status.recording,.status.processing{background:#422006;color:#fde68a}.status.scheduled{background:#172554;color:#93c5fd}.status.joining{background:#312e81;color:#c4b5fd}.status.upcoming{background:#0c2d48;color:#7dd3fc}
 .collapsible.collapsed{display:none}
@@ -431,10 +451,12 @@ function renderMeetings(page=currentPage){const rows=filteredMeetings(); const t
 function renderPagination(total,totalPages){const el=document.getElementById('pagination'); if(!el)return; const start=total?((currentPage-1)*pageSize+1):0; const end=Math.min(currentPage*pageSize,total); el.innerHTML=`<span class="muted">${start}-${end} of ${total}</span><div class="pager-actions"><button onclick="renderMeetings(${currentPage-1})" ${currentPage<=1?'disabled':''}>Prev</button><button onclick="renderMeetings(${currentPage+1})" ${currentPage>=totalPages?'disabled':''}>Next</button></div>`;}
 function clearFilters(){document.getElementById('searchTitle').value=''; document.getElementById('dateFrom').value=''; document.getElementById('dateTo').value=''; renderMeetings(1);}
 function localDateKey(v){if(!v)return ''; const d=new Date(v); if(Number.isNaN(d.getTime()))return ''; const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return `${d.getFullYear()}-${m}-${day}`;}
-async function loadDetail(code){const d=await api('meetings/'+encodeURIComponent(code)); const m=d.meeting; const files=m.files||{}; document.getElementById('detail').innerHTML=`<div class="detail-body"><h3>${esc(m.title)}</h3><p><button onclick="rejoin('${esc(m.meet_code)}')">Rejoin</button></p>
+async function loadDetail(code){const d=await api('meetings/'+encodeURIComponent(code)); const m=d.meeting; const files=m.files||{}; document.getElementById('detail').innerHTML=`<div class="detail-body"><h3>${esc(m.title)}</h3><p>${actionButtons(m)}</p>
 ${kv('Status',badge(m.status))}${kv('Meet code',esc(m.meet_code))}${kv('Event ID',esc(m.event_id))}${kv('Host',esc(m.organizer||''))}${kv('Attendees',attendeeList(m.attendees))}${kv('Scheduled',fmt(m.scheduled_start_utc))}${kv('Delivered',fmt(m.delivered_at))}${kv('Audio',fileLine(files.audio))}${kv('Listen',audioPlayer(m))}${kv('Notes',fileLine(files.notes))}${kv('Minutes',fileLine(files.minutes))}${kv('Transcript',fileLine(files.transcript))}${m.last_error?kv('Error',esc(m.last_error)):''}
 ${codeBlock('Summary',files.summary?.content||'')}${codeBlock('Meeting Minutes',files.minutes?.content||'')}${codeBlock('Transcript',files.transcript?.content||'')}${codeBlock('Notes',files.notes?.content||'')}</div>`;}
+function actionButtons(m){const rejoin=`<button onclick="rejoin('${esc(m.meet_code)}')">Rejoin</button>`; const out=m.status==='recording'?` <button class="danger" onclick="forceOut('${esc(m.meet_code)}')">Out</button>`:''; return rejoin+out;}
 async function rejoin(code){const result=await api('meetings/'+encodeURIComponent(code)+'/rejoin',{method:'POST'}); if(result.error){alert(result.error); return;} alert('Rejoin queued'); await loadAll(); await loadDetail(code);}
+async function forceOut(code){if(!confirm('Force bot out and process transcript now?'))return; const result=await api('meetings/'+encodeURIComponent(code)+'/force-out',{method:'POST'}); if(result.error){alert(result.error); return;} alert('Out queued'); await loadAll(); await loadDetail(code);}
 function kv(k,v){return `<div class="kv"><div class="muted">${k}</div><div>${v}</div></div>`}
 function attendeeList(v){if(Array.isArray(v)&&v.length)return v.map(esc).join('<br>'); return 'missing';}
 function fileLine(f){return f?.exists?`${esc(f.path)} <span class="muted">(${f.size} bytes)</span>`:'missing'}

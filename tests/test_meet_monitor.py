@@ -85,3 +85,16 @@ async def test_alone_timeout_after_10_minutes_waits_5_minutes() -> None:
     assert reason == "alone"
     assert participants == ("bot",)
     assert duration == 17 * 60
+
+
+@pytest.mark.anyio
+async def test_force_exit_returns_immediately() -> None:
+    clock = FakeClock(datetime(2026, 5, 20, tzinfo=UTC))
+    monitor = _monitor([["bot", "An"]], clock)
+    monitor.should_force_exit = lambda: True
+
+    reason, participants, duration = await monitor.run_until_exit()
+
+    assert reason == "force_out"
+    assert participants == ("bot", "An")
+    assert duration == 0
