@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import UTC, datetime
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,6 +12,7 @@ from src.auth.token_store import TokenStore
 from src.calendar_watcher.classifier import to_meeting_event
 from src.calendar_watcher.client import CalendarClient
 from src.config import load_settings
+from src.models.meeting_event import MeetingEvent
 from src.runtime_status import STATUS
 from src.state.db import connect
 from src.state.meetings_repo import TERMINAL_STATUSES, MeetingsRepo
@@ -91,6 +93,9 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def _handle_api_post(self, parsed) -> None:
         suffix = parsed.path.removeprefix("/admin/api/")
+        if suffix == "manual-join":
+            self._send_json(_request_manual_join(self._read_json_body()))
+            return
         if suffix == "settings/audio-retention":
             self._send_json(_update_audio_retention(self._read_json_body()))
             return
@@ -234,6 +239,35 @@ def _request_rejoin(meet_code: str) -> dict:
         conn.close()
 
 
+def _request_manual_join(payload: dict) -> dict:
+    meet_code = _normalize_meet_code(str(payload.get("meet_code") or payload.get("url") or ""))
+    if not meet_code:
+        return {"error": "invalid Meet code"}
+    settings = load_settings()
+    now = datetime.now(UTC)
+    conn = connect(settings.db_path)
+    try:
+        repo = MeetingsRepo(conn)
+        meeting = repo.get(meet_code)
+        if meeting and meeting["status"] in {"joining", "recording", "processing"}:
+            return {"error": f"meeting already {meeting['status']}", "meet_code": meet_code}
+        if not meeting:
+            repo.upsert(
+                MeetingEvent(
+                    meet_code=meet_code,
+                    event_id=f"manual:{meet_code}:{int(now.timestamp())}",
+                    start_utc=now,
+                    title=f"Manual Meet {meet_code}",
+                    organizer=settings.user_email,
+                    attendees=(),
+                )
+            )
+        command_id = repo.request_rejoin(meet_code)
+        return {"ok": True, "command_id": command_id, "meet_code": meet_code, "meeting": _row_to_dict(repo.get(meet_code))}
+    finally:
+        conn.close()
+
+
 def _request_force_out(meet_code: str) -> dict:
     settings = load_settings()
     conn = connect(settings.db_path)
@@ -248,6 +282,14 @@ def _request_force_out(meet_code: str) -> dict:
         return {"ok": True, "command_id": command_id, "meet_code": meet_code}
     finally:
         conn.close()
+
+
+def _normalize_meet_code(value: str) -> str | None:
+    raw = value.strip().lower()
+    match = re.search(r"([a-z]{3})-?([a-z]{4})-?([a-z]{3})", raw)
+    if not match:
+        return None
+    return "-".join(match.groups())
 
 
 def _admin_settings() -> dict:
@@ -393,7 +435,8 @@ def _admin_html() -> str:
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Meeting Assistant Admin</title>{_style()}</head>
 <body><header><h1>Meeting Assistant</h1><div class="header-actions"><div id="status" aria-live="polite">Loading…</div><a class="button-link" href="/admin/settings">Settings</a></div></header>
-<main><section class="panel"><div class="panel-head"><h2>Upcoming</h2><div class="panel-actions"><button onclick="loadAll()">Refresh</button><button id="upcomingToggle" onclick="toggleUpcoming()">Show</button></div></div><div id="upcoming" class="collapsible collapsed"></div></section>
+<main><section class="panel manual-panel"><div class="manual-join"><label class="sr-only" for="manualMeetCode">Meet code or link</label><input id="manualMeetCode" name="manualMeetCode" placeholder="Paste Meet code or link…" autocomplete="off" autocapitalize="none" spellcheck="false" onpaste="setTimeout(manualJoin,0)" onkeydown="if(event.key==='Enter')manualJoin()"><button onclick="manualJoin()">Join</button></div></section>
+<section class="panel"><div class="panel-head"><h2>Upcoming</h2><div class="panel-actions"><button onclick="loadAll()">Refresh</button><button id="upcomingToggle" onclick="toggleUpcoming()">Show</button></div></div><div id="upcoming" class="collapsible collapsed"></div></section>
 <section class="grid"><div class="panel"><h2>History</h2><div class="filters"><label class="sr-only" for="searchTitle">Search title</label><input id="searchTitle" name="searchTitle" placeholder="Search title…" autocomplete="off" oninput="renderMeetings(1)"><label class="sr-only" for="dateFrom">From date</label><input id="dateFrom" name="dateFrom" type="date" autocomplete="off" onchange="renderMeetings(1)"><label class="sr-only" for="dateTo">To date</label><input id="dateTo" name="dateTo" type="date" autocomplete="off" onchange="renderMeetings(1)"><button onclick="clearFilters()">Clear</button></div><div id="meetings"></div><div id="pagination" class="pagination"></div></div>
 <div class="panel detail"><h2>Meeting Detail</h2><div id="detail" class="empty-detail">Select a meeting.</div></div></section></main>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -417,13 +460,13 @@ header{height:56px;display:flex;align-items:center;justify-content:space-between
 h1,h2,h3{margin:0} h1{font-size:18px} h2{font-size:15px}
 main{padding:18px;display:flex;flex-direction:column;gap:16px}.grid{display:grid;grid-template-columns:minmax(320px,430px) 1fr;gap:16px}
 .panel{background:#0f172a;border:1px solid #263244;border-radius:8px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.28)}.panel h2,.panel-head{padding:12px 14px;border-bottom:1px solid #263244}.panel-head{display:flex;align-items:center;justify-content:space-between}
-button,input,.button-link{height:32px;border:1px solid #334155;background:#182235;color:#e5e7eb;border-radius:6px;padding:0 10px;touch-action:manipulation}button{cursor:pointer}button:hover,.button-link:hover{background:#22304a;border-color:#475569}button.danger{background:#451a1a;border-color:#7f1d1d;color:#fecaca}button.danger:hover{background:#5f1d1d;border-color:#991b1b}button:focus-visible,input:focus-visible,.button-link:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}.button-link{display:inline-flex;align-items:center;text-decoration:none}input::placeholder{color:#64748b}.service-status{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 9px;border:1px solid #334155;background:#111827;color:#e5e7eb;font-size:12px;line-height:1.3}.service-status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}.service-status.running{background:#102f20;border-color:#166534;color:#86efac}.service-status.degraded{background:#422006;border-color:#a16207;color:#fde68a}.service-status.failed{background:#451a1a;border-color:#991b1b;color:#fecaca}.service-status.starting{background:#172554;border-color:#1d4ed8;color:#93c5fd}.service-status.idle{background:#1f2937;border-color:#475569;color:#cbd5e1}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.settings-panel{max-width:760px}.settings-row{display:grid;grid-template-columns:180px 120px auto 1fr;gap:10px;align-items:center;padding:12px 14px}.filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,126px) minmax(112px,126px) auto;gap:8px;padding:12px 14px;border-bottom:1px solid #263244}.filters input{min-width:0}.filters input[type=date]{padding:0 6px;font-size:13px}.row{padding:10px 14px;border-bottom:1px solid #1f2937;cursor:pointer}.row:hover,.row.selected{background:#152033}.row.selected{box-shadow:inset 3px 0 0 #38bdf8}
+button,input,.button-link{height:32px;border:1px solid #334155;background:#182235;color:#e5e7eb;border-radius:6px;padding:0 10px;touch-action:manipulation}button{cursor:pointer}button:hover,.button-link:hover{background:#22304a;border-color:#475569}button.danger{background:#451a1a;border-color:#7f1d1d;color:#fecaca}button.danger:hover{background:#5f1d1d;border-color:#991b1b}button:focus-visible,input:focus-visible,.button-link:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}.button-link{display:inline-flex;align-items:center;text-decoration:none}input::placeholder{color:#64748b}.manual-panel{padding:12px 14px}.manual-join{display:grid;grid-template-columns:minmax(220px,420px) auto;gap:8px;align-items:center}.manual-join input{width:100%}.service-status{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 9px;border:1px solid #334155;background:#111827;color:#e5e7eb;font-size:12px;line-height:1.3}.service-status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}.service-status.running{background:#102f20;border-color:#166534;color:#86efac}.service-status.degraded{background:#422006;border-color:#a16207;color:#fde68a}.service-status.failed{background:#451a1a;border-color:#991b1b;color:#fecaca}.service-status.starting{background:#172554;border-color:#1d4ed8;color:#93c5fd}.service-status.idle{background:#1f2937;border-color:#475569;color:#cbd5e1}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.settings-panel{max-width:760px}.settings-row{display:grid;grid-template-columns:180px 120px auto 1fr;gap:10px;align-items:center;padding:12px 14px}.filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,126px) minmax(112px,126px) auto;gap:8px;padding:12px 14px;border-bottom:1px solid #263244}.filters input{min-width:0}.filters input[type=date]{padding:0 6px;font-size:13px}.row{padding:10px 14px;border-bottom:1px solid #1f2937;cursor:pointer}.row:hover,.row.selected{background:#152033}.row.selected{box-shadow:inset 3px 0 0 #38bdf8}
 .pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;border-top:1px solid #263244}.pagination .pager-actions{display:flex;gap:8px}.pagination button:disabled{opacity:.45;cursor:not-allowed}
 .muted{color:#94a3b8}.status{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 8px;background:#1e293b;color:#c7d2fe;font-size:12px;line-height:1.35}.status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}.status.failed{background:#451a1a;color:#fecaca}.status.delivered{background:#102f20;color:#86efac}.status.no_one_joined{background:#1f2937;color:#cbd5e1}.status.recording,.status.processing{background:#422006;color:#fde68a}.status.scheduled{background:#172554;color:#93c5fd}.status.joining{background:#312e81;color:#c4b5fd}.status.upcoming{background:#0c2d48;color:#7dd3fc}.status.checking{background:#172554;color:#bfdbfe}.status.checking .dots span{animation:dotPulse 1.2s infinite;opacity:.25}.status.checking .dots span:nth-child(2){animation-delay:.2s}.status.checking .dots span:nth-child(3){animation-delay:.4s}@keyframes dotPulse{0%,80%,100%{opacity:.25}40%{opacity:1}}
 .collapsible.collapsed{display:none}
 .detail{min-height:520px}.empty-detail{padding:14px}.detail-body{padding:14px}.kv{display:grid;grid-template-columns:160px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid #1f2937}.code-block{margin:12px 0 18px;border:1px solid #263244;border-radius:8px;overflow:hidden;background:#050914}.code-head{height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#111827;border-bottom:1px solid #263244}.code-head h3{font-size:13px}.copy-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}.copy-btn svg{width:15px;height:15px}.copied{background:#103224!important;border-color:#166534!important;color:#86efac!important}pre{white-space:pre-wrap;background:#050914;color:#e5e7eb;margin:0;padding:12px;max-height:360px;overflow:auto}
 table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 10px;border-bottom:1px solid #1f2937}.meet-mini{display:flex;align-items:center;gap:4px;margin-bottom:5px;color:#94a3b8;font-size:8.5px;line-height:1.2}.meet-mini-code{overflow-wrap:anywhere}.mini-icon{width:18px;height:18px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:transparent;border:1px solid transparent;border-radius:5px;color:#94a3b8;text-decoration:none}.mini-icon:hover{background:#1e293b;border-color:#334155}.mini-icon svg{width:11px;height:11px}.login{min-height:100vh;display:grid;place-items:center;background:#070b12}.login-box{width:min(360px,calc(100vw - 32px));background:#0f172a;border:1px solid #263244;border-radius:8px;padding:20px;display:flex;flex-direction:column;gap:10px}.login-box input{height:36px;border:1px solid #334155;background:#070b12;color:#e5e7eb;border-radius:6px;padding:0 10px}.error{color:#fca5a5;margin:0}audio{width:min(560px,100%);height:34px;filter:invert(1) hue-rotate(180deg)}
-@media(max-width:900px){.grid{grid-template-columns:1fr}.filters,.settings-row{grid-template-columns:1fr 1fr}.settings-row label{grid-column:1/-1}.upcoming-table th,.upcoming-table td{padding:8px 6px}.upcoming-table{table-layout:fixed}.upcoming-title{width:52%}.upcoming-time{width:24%}}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.filters,.settings-row,.manual-join{grid-template-columns:1fr 1fr}.manual-join input{grid-column:1/-1}.settings-row label{grid-column:1/-1}.upcoming-table th,.upcoming-table td{padding:8px 6px}.upcoming-table{table-layout:fixed}.upcoming-title{width:52%}.upcoming-time{width:24%}}
 </style>"""
 
 
@@ -442,6 +485,7 @@ let currentPage=Number(urlState.get('page')||'1')||1;
 let detailPollTimer=null;
 let watchedMeeting='';
 let pendingAction=null;
+let manualJoinBusy=false;
 const pageSize=20;
 async function loadAll(){await loadDashboard();}
 async function loadDashboard(){await Promise.all([loadStatus(),loadUpcoming(),loadMeetings()]); if(selectedMeeting) await loadDetail(selectedMeeting,{push:false});}
@@ -460,6 +504,7 @@ function renderMeetings(page=currentPage,{push=true}={}){const rows=filteredMeet
 function renderPagination(total,totalPages){const el=document.getElementById('pagination'); if(!el)return; const start=total?((currentPage-1)*pageSize+1):0; const end=Math.min(currentPage*pageSize,total); el.innerHTML=`<span class="muted">${start}-${end} of ${total}</span><div class="pager-actions"><button onclick="renderMeetings(${currentPage-1})" ${currentPage<=1?'disabled':''}>Prev</button><button onclick="renderMeetings(${currentPage+1})" ${currentPage>=totalPages?'disabled':''}>Next</button></div>`;}
 function clearFilters(){document.getElementById('searchTitle').value=''; document.getElementById('dateFrom').value=''; document.getElementById('dateTo').value=''; renderMeetings(1);}
 function localDateKey(v){if(!v)return ''; const d=new Date(v); if(Number.isNaN(d.getTime()))return ''; const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return `${d.getFullYear()}-${m}-${day}`;}
+function normalizeMeetCode(value){const match=String(value||'').trim().toLowerCase().match(/([a-z]{3})-?([a-z]{4})-?([a-z]{3})/); return match?`${match[1]}-${match[2]}-${match[3]}`:'';}
 async function loadDetail(code,{push=true}={}){selectedMeeting=code; if(push)updateUrl({code,page:currentPage}); const d=await api('meetings/'+encodeURIComponent(code)); const m=d.meeting; const files=m.files||{}; if(pendingAction?.code===code&&m.status!==pendingAction.fromStatus)pendingAction=null; const statusHtml=pendingAction?.code===code?checkingBadge():badge(m.status); renderMeetings(currentPage,{push:false}); document.getElementById('detail').innerHTML=`<div class="detail-body"><h3>${esc(m.title)}</h3><p>${actionButtons(m)}</p>
 ${kv('Status',statusHtml)}${kv('Meet code',esc(m.meet_code))}${kv('Event ID',esc(m.event_id))}${kv('Host',esc(m.organizer||''))}${kv('Attendees',attendeeList(m.attendees))}${kv('Scheduled',fmt(m.scheduled_start_utc))}${kv('Delivered',fmt(m.delivered_at))}${kv('Audio',fileLine(files.audio))}${kv('Listen',audioPlayer(m))}${kv('Notes',fileLine(files.notes))}${kv('Minutes',fileLine(files.minutes))}${kv('Transcript',fileLine(files.transcript))}${m.last_error?kv('Error',esc(m.last_error)):''}
 ${codeBlock('Summary',files.summary?.content||'')}${codeBlock('Meeting Minutes',files.minutes?.content||'')}${codeBlock('Transcript',files.transcript?.content||'')}${codeBlock('Notes',files.notes?.content||'')}</div>`;}
@@ -473,6 +518,7 @@ function startDetailPolling(code){watchedMeeting=code; if(detailPollTimer)clearI
 async function queueAction(code,path,successText){const current=allMeetings.find(m=>m.meet_code===code); pendingAction={code,fromStatus:current?.status||''}; await loadDetail(code,{push:false}); startDetailPolling(code); try{const result=await api('meetings/'+encodeURIComponent(code)+'/'+path,{method:'POST'}); if(result.error){throw new Error(result.error);} await notify('success',successText);}catch(e){pendingAction=null; stopDetailPolling(); await loadDetail(code,{push:false}); await notify('error','Action failed',e.message||String(e));}}
 async function rejoin(code){await queueAction(code,'rejoin','Rejoin queued');}
 async function forceOut(code){const ok=await confirmDialog('Force bot out?', 'Bot will leave Meet and process transcript now.', 'Out'); if(!ok)return; await queueAction(code,'force-out','Out queued');}
+async function manualJoin(){if(manualJoinBusy)return; const input=document.getElementById('manualMeetCode'); const code=normalizeMeetCode(input?.value||''); if(!code){await notify('error','Invalid Meet code','Paste a Google Meet code or URL.'); return;} manualJoinBusy=true; pendingAction={code,fromStatus:''}; selectedMeeting=code; updateUrl({code,page:currentPage}); document.getElementById('detail').innerHTML=`<div class="detail-body"><h3>${esc(code)}</h3>${kv('Status',checkingBadge())}</div>`; try{const result=await api('manual-join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({meet_code:code})}); if(result.error){throw new Error(result.error);} input.value=result.meet_code; pendingAction={code:result.meet_code,fromStatus:result.meeting?.status||''}; await loadMeetings(); await loadDetail(result.meet_code,{push:true}); startDetailPolling(result.meet_code); await notify('success','Join queued',result.meet_code);}catch(e){pendingAction=null; await notify('error','Join failed',e.message||String(e));}finally{manualJoinBusy=false;}}
 window.addEventListener('popstate',async()=>{const params=new URLSearchParams(window.location.search); selectedMeeting=params.get('meeting')||''; currentPage=Number(params.get('page')||'1')||1; renderMeetings(currentPage,{push:false}); if(selectedMeeting)await loadDetail(selectedMeeting,{push:false}); else document.getElementById('detail').innerHTML='Select a meeting.';});
 function kv(k,v){return `<div class="kv"><div class="muted">${k}</div><div>${v}</div></div>`}
 function attendeeList(v){if(Array.isArray(v)&&v.length)return v.map(esc).join('<br>'); return 'missing';}
