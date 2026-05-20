@@ -1,0 +1,169 @@
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from src.bot.meeting_session import MeetingSession
+from src.models.meeting_event import MeetingEvent
+
+
+class FakeRepo:
+    def __init__(self) -> None:
+        self.statuses = []
+
+    def mark_status(self, meet_code, status, last_error=None, audio_path=None):
+        self.statuses.append((meet_code, status, last_error, audio_path))
+
+    def mark_delivered(self, meet_code, notes_path, **extra_paths):
+        self.statuses.append((meet_code, "delivered", notes_path, extra_paths))
+
+    def claim_pending_force_out(self, meet_code):
+        return None
+
+
+class FakeBrowserSession:
+    page = object()
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FakeBrowserFactory:
+    def __init__(self) -> None:
+        self.pulse_sinks = []
+
+    async def launch_with_state(self, pulse_sink=None):
+        self.pulse_sinks.append(pulse_sink)
+        return FakeBrowserSession()
+
+
+class FakeRecorder:
+    starts = []
+
+    def __init__(self, audio_dir, audio_source):
+        self.audio_dir = Path(audio_dir)
+        self.audio_source = audio_source
+        self.running = False
+        self.output_path = None
+
+    def start(self, meet_code, audio_source=None):
+        self.running = True
+        self.output_path = self.audio_dir / f"{meet_code}.opus"
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.output_path.write_bytes(b"opus")
+        self.starts.append((meet_code, audio_source))
+        return self.output_path
+
+    def stop(self):
+        self.running = False
+        return self.output_path
+
+    def is_running(self):
+        return self.running
+
+
+class FakeJoinResult:
+    admitted = True
+    status = "joined"
+    error_msg = None
+
+
+class FakeMeetJoiner:
+    async def join(self, page, meet_code, display_name):
+        return FakeJoinResult()
+
+
+class FakeMeetMonitor:
+    def __init__(self, page, should_force_exit):
+        pass
+
+    async def run_until_exit(self):
+        return "alone_timeout", ["Host", "Bot"], 30
+
+
+def meeting(code: str) -> MeetingEvent:
+    return MeetingEvent(
+        meet_code=code,
+        event_id=code,
+        start_utc=datetime.now(UTC),
+        end_utc=None,
+        title=code,
+        organizer=None,
+        attendees=(),
+    )
+
+
+async def fake_process_result(result):
+    audio_path = result.audio_path
+    output_dir = audio_path.parent
+    return output_dir / "transcript.md", output_dir / "summary.md", output_dir / "notes.md"
+
+
+@pytest.mark.anyio
+async def test_session_uses_distinct_sink_and_monitor_per_meeting(tmp_path, monkeypatch) -> None:
+    created = []
+    removed = []
+    FakeRecorder.starts = []
+
+    monkeypatch.setattr("src.bot.meeting_session.AudioRecorder", FakeRecorder)
+    monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", FakeMeetJoiner)
+    monkeypatch.setattr("src.bot.meeting_session.MeetMonitor", FakeMeetMonitor)
+    monkeypatch.setattr(
+        "src.bot.meeting_session.create_session_sink",
+        lambda sink: created.append(sink) or f"{sink}.monitor",
+    )
+    monkeypatch.setattr("src.bot.meeting_session.remove_session_sink", lambda sink: removed.append(sink))
+
+    factory = FakeBrowserFactory()
+    session = MeetingSession(
+        FakeRepo(),
+        factory,
+        tmp_path,
+        "meet_capture.monitor",
+        "Bot",
+        fake_process_result,
+    )
+
+    await session.run(meeting("abc-defg-hij"))
+    await session.run(meeting("xyz-uvwx-rst"))
+
+    assert created == ["meet_capture_abc_defg_hij", "meet_capture_xyz_uvwx_rst"]
+    assert factory.pulse_sinks == created
+    assert FakeRecorder.starts == [
+        ("abc-defg-hij", "meet_capture_abc_defg_hij.monitor"),
+        ("xyz-uvwx-rst", "meet_capture_xyz_uvwx_rst.monitor"),
+    ]
+    assert removed == created
+
+
+@pytest.mark.anyio
+async def test_session_removes_sink_when_join_fails(tmp_path, monkeypatch) -> None:
+    removed = []
+
+    class DeniedJoiner:
+        async def join(self, page, meet_code, display_name):
+            result = FakeJoinResult()
+            result.admitted = False
+            result.status = "denied"
+            return result
+
+    monkeypatch.setattr("src.bot.meeting_session.AudioRecorder", FakeRecorder)
+    monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", DeniedJoiner)
+    monkeypatch.setattr("src.bot.meeting_session.create_session_sink", lambda sink: f"{sink}.monitor")
+    monkeypatch.setattr("src.bot.meeting_session.remove_session_sink", lambda sink: removed.append(sink))
+
+    session = MeetingSession(
+        FakeRepo(),
+        FakeBrowserFactory(),
+        tmp_path,
+        "meet_capture.monitor",
+        "Bot",
+        fake_process_result,
+    )
+
+    await session.run(meeting("abc-defg-hij"))
+
+    assert removed == ["meet_capture_abc_defg_hij"]

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     db_path: Path = Field(default=Path("/data/meeting-assistant.db"))
     audio_dir: Path = Field(default=Path("/data/audio"))
     audio_source: str = Field(default="meet_capture.monitor")
+    max_concurrent_meetings: int = Field(default=3, ge=1, le=10)
     output_dir: Path = Field(default=Path("/data/output"))
     debug_dir: Path = Field(default=Path("/data/debug"))
 

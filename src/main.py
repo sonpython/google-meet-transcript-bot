@@ -109,7 +109,7 @@ async def main() -> None:
         settings.auto_purge_audio,
         lambda: repo.get_audio_retention_days(settings.audio_retention_days),
     )
-    runner = JobRunner(repo, meeting_session.run)
+    runner = JobRunner(repo, meeting_session.run, settings.max_concurrent_meetings)
     runner.start()
     notification_client = (discord_client or telegram_client) if settings.health_notify_enabled else None
     if gemini_client or notification_client:

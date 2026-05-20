@@ -1,5 +1,39 @@
 # Session Sync
 
+## 2026-05-20 — concurrent-audio-contamination-fix
+
+Status: implemented, deployed to `192.168.1.120:/opt/meeting-assistant`, and verified.
+
+Root cause:
+
+- Overlapping meetings were routed through the shared PulseAudio sink `meet_capture.monitor`.
+- `sch-uuas-hjn` captured a HeaTech segment that belonged to `arq-guqp-pvd`.
+
+Code changes:
+
+- Added per-meeting PulseAudio null sinks via `src/runtime_audio.py`.
+- `MeetingSession` now creates `meet_capture_<meet_code>`, launches Chromium with `PULSE_SINK=<sink>`, records `<sink>.monitor`, and unloads the sink in `finally`.
+- `AudioRecorder.start()` accepts an explicit `audio_source`.
+- `JobRunner` now wraps meeting runs with a configurable concurrency cap, default `MAX_CONCURRENT_MEETINGS=3`.
+- Added `src/tools/reprocess_meeting.py` for idempotent transcript/summary/minutes/notes rebuild from all audio segments.
+
+Data repair on host:
+
+- Backup created: `/opt/meeting-assistant/data/backups/audio.bak-20260520T073657Z` and matching DB backup.
+- Moved `sch-uuas-hjn.opus` to `arq-guqp-pvd-20260520T030500Z.opus`.
+- Quarantined small/0-byte `sch-uuas-hjn` fragments under `data/audio/quarantine-20260520-concurrent-fix/`.
+- Reprocessed:
+  - `arq-guqp-pvd` from 3 audio segments.
+  - `sch-uuas-hjn` from 2 clean EVsafe segments.
+
+Verification:
+
+- `uv run pytest` -> 47 passed.
+- `python -m compileall src` -> passed.
+- Docker container healthy.
+- API reports `arq-guqp-pvd` delivered with 3 audio segments and `sch-uuas-hjn` delivered with 2 audio segments.
+- Grep found no HeaTech terms (`Viện Nhi`, `E-Host`, `FPT`, `Patient App`, `DX30`) in EVsafe transcript/minutes.
+
 ## 2026-05-20 — autonomous-mvp-implementation
 
 Status: MVP implemented and offline verified. Live pilot remains pending because it needs real Google OAuth, bot account login, audio device routing, Gemini API key, and Telegram credentials.

@@ -28,12 +28,15 @@ class BrowserSessionFactory:
         self.state_store = state_store
         self.headless = headless
 
-    async def launch_with_state(self) -> BrowserSession:
+    async def launch_with_state(self, pulse_sink: str | None = None) -> BrowserSession:
         playwright = await async_playwright().start()
+        env = os.environ.copy()
+        if pulse_sink:
+            env["PULSE_SINK"] = pulse_sink
         browser = await playwright.chromium.launch(
             headless=self.headless,
             args=["--disable-blink-features=AutomationControlled", "--use-fake-ui-for-media-stream"],
-            env=os.environ.copy(),
+            env=env,
         )
         state = self.state_store.load()
         context = await browser.new_context(

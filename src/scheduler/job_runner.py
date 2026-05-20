@@ -1,3 +1,5 @@
+import asyncio
+import inspect
 from datetime import UTC, datetime, timedelta
 from sqlite3 import Row
 
@@ -10,9 +12,10 @@ LATE_START_GRACE = timedelta(minutes=30)
 
 
 class JobRunner:
-    def __init__(self, repo: MeetingsRepo, run_meeting) -> None:
+    def __init__(self, repo: MeetingsRepo, run_meeting, max_concurrent_meetings: int = 3) -> None:
         self.repo = repo
         self.run_meeting = run_meeting
+        self._semaphore = asyncio.Semaphore(max(1, max_concurrent_meetings))
         self.scheduler = AsyncIOScheduler(timezone=UTC)
 
     def start(self) -> None:
@@ -38,7 +41,7 @@ class JobRunner:
         if immediate or run_date < datetime.now(UTC):
             run_date = datetime.now(UTC)
         self.scheduler.add_job(
-            self.run_meeting,
+            self._run_meeting_capped,
             "date",
             run_date=run_date,
             args=[meeting],
@@ -46,6 +49,12 @@ class JobRunner:
             replace_existing=True,
             misfire_grace_time=300,
         )
+
+    async def _run_meeting_capped(self, meeting: MeetingEvent) -> None:
+        async with self._semaphore:
+            result = self.run_meeting(meeting)
+            if inspect.isawaitable(result):
+                await result
 
     def resume_pending(self) -> None:
         now = datetime.now(UTC)

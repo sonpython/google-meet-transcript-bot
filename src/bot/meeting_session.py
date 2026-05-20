@@ -10,6 +10,7 @@ from src.bot.meet_joiner import MeetJoiner
 from src.bot.meet_monitor import MeetMonitor
 from src.models.meeting_event import MeetingEvent
 from src.models.meeting_result import MeetingResult
+from src.runtime_audio import create_session_sink, remove_session_sink, safe_session_sink_name
 
 
 class MeetingSession:
@@ -38,14 +39,24 @@ class MeetingSession:
         session = None
         recorder = AudioRecorder(self.audio_dir, self.audio_source)
         audio_path = None
+        sink_name = None
+        monitor_source = self.audio_source
         try:
             self.repo.mark_status(meeting.meet_code, "joining")
-            session = await self.browser_factory.launch_with_state()
+            sink_name = safe_session_sink_name(meeting.meet_code)
+            monitor_source = create_session_sink(sink_name)
+            self.log.info(
+                "meeting_session_audio_sink_created",
+                meet_code=meeting.meet_code,
+                sink=sink_name,
+                monitor=monitor_source,
+            )
+            session = await self.browser_factory.launch_with_state(pulse_sink=sink_name)
             join_result = await MeetJoiner().join(session.page, meeting.meet_code, self.display_name)
             if not join_result.admitted:
                 self.repo.mark_status(meeting.meet_code, "failed", join_result.error_msg or join_result.status)
                 return
-            audio_path = recorder.start(meeting.meet_code)
+            audio_path = recorder.start(meeting.meet_code, audio_source=monitor_source)
             self.repo.mark_status(meeting.meet_code, "recording", audio_path=str(audio_path))
             reason, participants, duration = await MeetMonitor(
                 session.page,
@@ -79,6 +90,9 @@ class MeetingSession:
         finally:
             if session:
                 await session.close()
+            if sink_name:
+                remove_session_sink(sink_name)
+                self.log.info("meeting_session_audio_sink_removed", meet_code=meeting.meet_code, sink=sink_name)
 
     def _claim_force_out(self, meet_code: str) -> bool:
         command = self.repo.claim_pending_force_out(meet_code)

@@ -14,6 +14,26 @@ Google Meet transcript bot for Workspace meetings.
 
 ## Latest Session
 
+### 2026-05-20 — concurrent-audio-contamination-fix
+
+Actor: Codex.
+
+Done:
+
+- Imported the relevant plan from `~/projects/autogate/plans/260520-1423-meeting-assistant-concurrent-audio-fix/`.
+- Fixed the shared PulseAudio sink bug by isolating each live meeting into its own session sink.
+- Added regression coverage for explicit recorder source, PulseAudio sink lifecycle, session sink isolation, and job concurrency cap.
+- Added `src/tools/reprocess_meeting.py` to regenerate outputs from all audio chunks without re-delivery.
+- Deployed to Docker host `192.168.1.120`.
+- Repaired affected data:
+  - `arq-guqp-pvd` now has 3 audio segments, including the relabeled HeaTech segment.
+  - `sch-uuas-hjn` now has only 2 clean EVsafe segments.
+  - Small/0-byte sch fragments are quarantined, with full backup retained on host.
+
+Future note:
+
+- Do not route concurrent meetings through `meet_capture.monitor`; use per-session sinks and keep `MAX_CONCURRENT_MEETINGS` bounded.
+
 ### 2026-05-20 — autonomous-mvp-implementation
 
 Actor: Codex.

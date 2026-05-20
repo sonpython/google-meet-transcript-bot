@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from src.models.meeting_event import MeetingEvent
 from src.scheduler.job_runner import JobRunner
 from src.state.db import connect
@@ -65,3 +67,34 @@ def test_old_missed_pending_meeting_is_failed(tmp_path) -> None:
     row = repo.get(meeting.meet_code)
     assert row["status"] == "failed"
     assert row["last_error"] == "missed scheduled start during downtime"
+
+
+@pytest.mark.anyio
+async def test_run_meeting_is_capped_by_semaphore(tmp_path) -> None:
+    repo = MeetingsRepo(connect(tmp_path / "state.db"))
+    running = 0
+    max_seen = 0
+
+    async def run_meeting(meeting):
+        nonlocal running, max_seen
+        running += 1
+        max_seen = max(max_seen, running)
+        await anyio_sleep(0.01)
+        running -= 1
+
+    async def anyio_sleep(seconds):
+        import anyio
+
+        await anyio.sleep(seconds)
+
+    runner = JobRunner(repo, run_meeting, max_concurrent_meetings=1)
+    first = MeetingEvent("abc-defg-hij", "1", datetime.now(UTC), None, "First", None, ())
+    second = MeetingEvent("xyz-uvwx-rst", "2", datetime.now(UTC), None, "Second", None, ())
+
+    import anyio
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(runner._run_meeting_capped, first)
+        task_group.start_soon(runner._run_meeting_capped, second)
+
+    assert max_seen == 1

@@ -1,9 +1,12 @@
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
 
 import structlog
+
+SESSION_SINK_PREFIX = "meet_capture_"
 
 
 def start_virtual_audio_if_enabled() -> None:
@@ -12,8 +15,51 @@ def start_virtual_audio_if_enabled() -> None:
     log = structlog.get_logger(__name__)
     _start_xvfb(log)
     _start_pulseaudio(log)
+    cleanup_stale_session_sinks(log)
     _ensure_null_sink(log)
     os.environ.setdefault("PULSE_SINK", "meet_capture")
+
+
+def safe_session_sink_name(meet_code: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", meet_code.lower()).strip("_")
+    if not slug:
+        raise ValueError("meet_code cannot produce a safe PulseAudio sink name")
+    return f"{SESSION_SINK_PREFIX}{slug}"
+
+
+def create_session_sink(sink_name: str) -> str:
+    if not re.fullmatch(r"[a-zA-Z0-9_]+", sink_name):
+        raise ValueError(f"unsafe PulseAudio sink name: {sink_name}")
+    _remove_sink_if_exists(sink_name)
+    result = subprocess.run(
+        [
+            "pactl",
+            "load-module",
+            "module-null-sink",
+            f"sink_name={sink_name}",
+            f"sink_properties=device.description={sink_name}",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to create PulseAudio sink {sink_name}: {result.stderr.strip()}")
+    monitor = f"{sink_name}.monitor"
+    _ensure_source_exists(monitor)
+    return monitor
+
+
+def remove_session_sink(sink_name: str) -> None:
+    _remove_sink_if_exists(sink_name)
+
+
+def cleanup_stale_session_sinks(log=None) -> None:
+    for module_id, sink_name in _loaded_null_sink_modules().items():
+        if sink_name.startswith(SESSION_SINK_PREFIX):
+            subprocess.run(["pactl", "unload-module", module_id], text=True, capture_output=True, check=False)
+            if log:
+                log.info("pulseaudio_stale_session_sink_removed", sink=sink_name, module_id=module_id)
 
 
 def _start_xvfb(log) -> None:
@@ -88,3 +134,41 @@ def _ensure_null_sink(log) -> None:
         log.info("pulseaudio_null_sink_ready", source="meet_capture.monitor")
         return
     raise RuntimeError(f"PulseAudio null sink missing: {sources.stderr.strip() or sources.stdout.strip()}")
+
+
+def _ensure_source_exists(source_name: str) -> None:
+    sources = subprocess.run(
+        ["pactl", "list", "short", "sources"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if source_name in sources.stdout:
+        return
+    raise RuntimeError(f"PulseAudio source missing: {source_name}: {sources.stderr.strip() or sources.stdout.strip()}")
+
+
+def _remove_sink_if_exists(sink_name: str) -> None:
+    module_id = _loaded_null_sink_modules().get(sink_name)
+    if module_id:
+        subprocess.run(["pactl", "unload-module", module_id], text=True, capture_output=True, check=False)
+
+
+def _loaded_null_sink_modules() -> dict[str, str]:
+    result = subprocess.run(
+        ["pactl", "list", "short", "modules"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return {}
+    modules: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3 or parts[1] != "module-null-sink":
+            continue
+        match = re.search(r"\bsink_name=([A-Za-z0-9_]+)\b", parts[2])
+        if match:
+            modules[match.group(1)] = parts[0]
+    return modules

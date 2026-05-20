@@ -12,7 +12,8 @@ class AudioRecorder:
         self.process: subprocess.Popen | None = None
         self.output_path: Path | None = None
 
-    def start(self, meet_code: str) -> Path:
+    def start(self, meet_code: str, audio_source: str | None = None) -> Path:
+        source = audio_source or self.audio_source
         self.audio_dir.mkdir(parents=True, exist_ok=True)
         self.output_path = self._next_output_path(meet_code)
         self.process = subprocess.Popen(
@@ -22,7 +23,7 @@ class AudioRecorder:
                 "-f",
                 "pulse",
                 "-i",
-                self.audio_source,
+                source,
                 "-ac",
                 "1",
                 "-ar",
@@ -40,7 +41,7 @@ class AudioRecorder:
         time.sleep(1)
         if self.process.poll() is not None:
             stderr = self.process.stderr.read() if self.process.stderr else ""
-            raise RuntimeError(f"ffmpeg audio source failed: {self.audio_source}: {stderr.strip()}")
+            raise RuntimeError(f"ffmpeg audio source failed: {source}: {stderr.strip()}")
         return self.output_path
 
     def stop(self) -> Path:
