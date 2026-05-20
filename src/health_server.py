@@ -245,23 +245,43 @@ def _request_manual_join(payload: dict) -> dict:
         return {"error": "invalid Meet code"}
     settings = load_settings()
     now = datetime.now(UTC)
+    calendar_meeting = _find_calendar_meeting(meet_code, settings)
     conn = connect(settings.db_path)
     try:
         repo = MeetingsRepo(conn)
         meeting = repo.get(meet_code)
-        if meeting and meeting["status"] in {"joining", "recording", "processing"}:
-            return {"error": f"meeting already {meeting['status']}", "meet_code": meet_code}
-        if not meeting:
-            repo.upsert(
-                MeetingEvent(
-                    meet_code=meet_code,
-                    event_id=f"manual:{meet_code}:{int(now.timestamp())}",
-                    start_utc=now,
-                    title=f"Manual Meet {meet_code}",
-                    organizer=settings.user_email,
-                    attendees=(),
+        if calendar_meeting:
+            if meeting:
+                repo.mark_status(
+                    meet_code,
+                    "scheduled" if meeting["status"] in TERMINAL_STATUSES else meeting["status"],
+                    None,
+                    event_id=calendar_meeting.event_id,
+                    scheduled_start_utc=calendar_meeting.start_utc.isoformat(),
+                    title=calendar_meeting.title,
+                    organizer=calendar_meeting.organizer,
+                    attendees=json.dumps(list(calendar_meeting.attendees), ensure_ascii=False),
                 )
+            else:
+                repo.upsert(calendar_meeting)
+            meeting = repo.get(meet_code)
+        if meeting and meeting["status"] in {"joining", "recording", "processing"}:
+            return {
+                "error": f"meeting already {meeting['status']}",
+                "meet_code": meet_code,
+                "meeting": _row_to_dict(meeting),
+            }
+        repo.upsert(
+            calendar_meeting
+            or MeetingEvent(
+                meet_code=meet_code,
+                event_id=f"manual:{meet_code}:{int(now.timestamp())}",
+                start_utc=now,
+                title=f"Manual Meet {meet_code}",
+                organizer=settings.user_email,
+                attendees=(),
             )
+        )
         command_id = repo.request_rejoin(meet_code)
         return {"ok": True, "command_id": command_id, "meet_code": meet_code, "meeting": _row_to_dict(repo.get(meet_code))}
     finally:
@@ -290,6 +310,51 @@ def _normalize_meet_code(value: str) -> str | None:
     if not match:
         return None
     return "-".join(match.groups())
+
+
+def _find_calendar_meeting(meet_code: str, settings) -> MeetingEvent | None:
+    try:
+        token_store = TokenStore(settings.token_store_path, settings.token_passphrase)
+        auth = OAuthUserAuth(token_store, str(settings.google_oauth_client_secrets), settings.oauth_redirect_port)
+        client = CalendarClient(auth.get_credentials(), settings.calendar_id)
+        for raw in client.list_upcoming(settings.calendar_lookahead_minutes):
+            raw_code = _event_meet_code(raw)
+            if raw_code != meet_code:
+                continue
+            return to_meeting_event(raw, settings.user_email) or _calendar_event_to_meeting(raw, meet_code)
+    except Exception:
+        return None
+    return None
+
+
+def _calendar_event_to_meeting(event: dict, meet_code: str) -> MeetingEvent | None:
+    raw_start = event.get("start", {}).get("dateTime")
+    if not raw_start:
+        return None
+    start_utc = datetime.fromisoformat(raw_start.replace("Z", "+00:00")).astimezone(UTC)
+    attendees = tuple(
+        attendee["email"]
+        for attendee in event.get("attendees", [])
+        if isinstance(attendee, dict) and attendee.get("email")
+    )
+    organizer = event.get("organizer", {}).get("email") if isinstance(event.get("organizer"), dict) else None
+    return MeetingEvent(
+        meet_code=meet_code,
+        event_id=str(event.get("id", "")),
+        start_utc=start_utc,
+        title=str(event.get("summary") or "Untitled meeting"),
+        organizer=organizer,
+        attendees=attendees,
+    )
+
+
+def _event_meet_code(event: dict) -> str | None:
+    if event.get("hangoutLink"):
+        return _normalize_meet_code(str(event["hangoutLink"]))
+    for entry in event.get("conferenceData", {}).get("entryPoints", []):
+        if entry.get("entryPointType") == "video" and entry.get("uri"):
+            return _normalize_meet_code(str(entry["uri"]))
+    return None
 
 
 def _admin_settings() -> dict:
@@ -368,7 +433,8 @@ def _upcoming_events() -> list[dict]:
         repo = MeetingsRepo(conn)
         for raw in client.list_upcoming(settings.calendar_lookahead_minutes):
             meeting = to_meeting_event(raw, settings.user_email)
-            stored = repo.get(meeting.meet_code) if meeting else None
+            raw_meet_code = _event_meet_code(raw)
+            stored = repo.get(meeting.meet_code if meeting else raw_meet_code) if (meeting or raw_meet_code) else None
             stored_status = stored["status"] if stored else None
             events.append(
                 {
@@ -376,7 +442,7 @@ def _upcoming_events() -> list[dict]:
                     "title": raw.get("summary") or "Untitled meeting",
                     "start": raw.get("start"),
                     "end": raw.get("end"),
-                    "meet_code": meeting.meet_code if meeting else None,
+                    "meet_code": meeting.meet_code if meeting else raw_meet_code,
                     "organizer": raw.get("organizer"),
                     "attendees": raw.get("attendees", []),
                     "hangoutLink": raw.get("hangoutLink"),

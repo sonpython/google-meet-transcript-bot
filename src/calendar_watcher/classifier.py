@@ -10,9 +10,11 @@ def is_qualifying(event: dict[str, Any], user_email: str) -> bool:
         return False
     normalized_user = user_email.casefold()
     organizer = _email(event.get("organizer"))
-    if organizer == normalized_user:
+    if organizer == normalized_user or _is_self(event.get("organizer")):
         return True
     for attendee in event.get("attendees", []):
+        if _is_self(attendee):
+            return attendee.get("responseStatus") != "declined"
         if _email(attendee) == normalized_user:
             return attendee.get("responseStatus") != "declined"
     return False
@@ -49,6 +51,10 @@ def _raw_email(value: Any) -> str | None:
     if isinstance(value, dict) and value.get("email"):
         return str(value["email"])
     return None
+
+
+def _is_self(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("self") is True
 
 
 def _meet_url(event: dict[str, Any]) -> str | None:

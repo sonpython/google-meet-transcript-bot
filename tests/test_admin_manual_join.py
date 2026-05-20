@@ -37,3 +37,9 @@ def test_manual_join_creates_meeting_and_command(tmp_path: Path, monkeypatch) ->
     assert meeting["organizer"] == "owner@example.com"
     assert command["command"] == "rejoin"
     assert command["status"] == "pending"
+
+
+def test_event_meet_code_extracts_hangout_link() -> None:
+    event = {"hangoutLink": "https://meet.google.com/arq-guqp-pvd?authuser=0"}
+
+    assert health_server._event_meet_code(event) == "arq-guqp-pvd"

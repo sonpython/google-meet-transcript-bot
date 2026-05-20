@@ -24,6 +24,16 @@ def test_organizer_with_meet_link_qualifies():
     assert is_qualifying(candidate, USER_EMAIL)
 
 
+def test_google_self_organizer_qualifies_even_when_email_setting_differs():
+    candidate = event(organizer={"email": "michael@chtlab.io", "self": True}, attendees=[])
+    assert is_qualifying(candidate, "sonunix@gmail.com")
+
+
+def test_google_self_attendee_qualifies_even_when_email_setting_differs():
+    candidate = event(attendees=[{"email": "michael@chtlab.io", "self": True, "responseStatus": "needsAction"}])
+    assert is_qualifying(candidate, "sonunix@gmail.com")
+
+
 def test_attendee_not_declined_qualifies_and_maps_event():
     meeting = to_meeting_event(event(), USER_EMAIL)
     assert meeting is not None
