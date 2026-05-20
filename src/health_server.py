@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from sqlite3 import Row
 from urllib.parse import parse_qs, unquote, urlparse
 
 from src.auth.oauth_user import OAuthUserAuth
@@ -42,6 +43,12 @@ class AdminHandler(BaseHTTPRequestHandler):
                 return
             self._handle_api(parsed)
             return
+        if parsed.path.startswith("/api/"):
+            if not self._is_authorized(parsed, allow_cookie=False):
+                self._send_json({"error": "unauthorized"}, status=401)
+                return
+            self._handle_public_api(parsed)
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:
@@ -54,6 +61,9 @@ class AdminHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "unauthorized"}, status=401)
                 return
             self._handle_api_post(parsed)
+            return
+        if parsed.path.startswith("/api/"):
+            self._send_json({"error": "method not allowed"}, status=405)
             return
         self.send_error(404)
 
@@ -91,6 +101,27 @@ class AdminHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=500)
 
+    def _handle_public_api(self, parsed) -> None:
+        suffix = parsed.path.removeprefix("/api/")
+        params = parse_qs(parsed.query)
+        try:
+            if suffix == "meetings":
+                self._send_json(_api_list_meetings(params))
+            elif suffix.startswith("meetings/"):
+                meet_code = _normalize_meet_code(unquote(suffix.removeprefix("meetings/")))
+                if not meet_code:
+                    self._send_json({"error": "invalid Meet code"}, status=400)
+                    return
+                self._send_json({"meeting": _api_meeting_detail(meet_code)})
+            elif suffix == "transcripts":
+                self._send_json(_api_transcripts(params))
+            else:
+                self._send_json({"error": "not found"}, status=404)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=400)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=500)
+
     def _handle_api_post(self, parsed) -> None:
         suffix = parsed.path.removeprefix("/admin/api/")
         if suffix == "manual-join":
@@ -109,16 +140,22 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         self._send_json({"error": "not found"}, status=404)
 
-    def _is_authorized(self, parsed) -> bool:
+    def _is_authorized(self, parsed, allow_cookie: bool = True) -> bool:
         expected = load_settings().admin_token
         if not expected:
             return False
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer ") and auth.removeprefix("Bearer ").strip() == expected:
             return True
+        if self.headers.get("X-API-Key", "").strip() == expected:
+            return True
+        if self.headers.get("X-Admin-Token", "").strip() == expected:
+            return True
         query_token = parse_qs(parsed.query).get("token", [""])[0]
         if query_token == expected:
             return True
+        if not allow_cookie:
+            return False
         raw_cookie = self.headers.get("Cookie", "")
         if raw_cookie:
             parsed_cookie = cookies.SimpleCookie(raw_cookie)
@@ -191,6 +228,170 @@ def _list_meetings() -> list[dict]:
         return [_row_to_dict(row) for row in rows]
     finally:
         conn.close()
+
+
+def _api_list_meetings(params: dict[str, list[str]]) -> dict:
+    limit = _bounded_int(_first_param(params, "limit"), default=50, minimum=1, maximum=200)
+    offset = _bounded_int(_first_param(params, "offset"), default=0, minimum=0, maximum=100_000)
+    include_content = _truthy(_first_param(params, "include_content"))
+    rows = _query_meetings(params, limit=limit, offset=offset)
+    total = _count_meetings(params)
+    return {
+        "meetings": [_api_meeting_payload(_row_to_dict(row), include_content=include_content) for row in rows],
+        "pagination": {"limit": limit, "offset": offset, "count": len(rows), "total": total},
+        "filters": _api_filter_echo(params),
+    }
+
+
+def _api_meeting_detail(meet_code: str) -> dict:
+    return _api_meeting_payload(_meeting_detail(meet_code), include_content=True)
+
+
+def _api_transcripts(params: dict[str, list[str]]) -> dict:
+    rows = _query_meetings(params, limit=_bounded_int(_first_param(params, "limit"), 20, 1, 100), offset=0)
+    meetings = [_api_meeting_payload(_meeting_detail(row["meet_code"]), include_content=True) for row in rows]
+    return {"meetings": meetings, "count": len(meetings), "filters": _api_filter_echo(params)}
+
+
+def _query_meetings(params: dict[str, list[str]], limit: int, offset: int) -> list[Row]:
+    settings = load_settings()
+    where, values = _meeting_filter_sql(params)
+    conn = connect(settings.db_path)
+    try:
+        return list(
+            conn.execute(
+                f"""
+                SELECT *
+                FROM meetings
+                {where}
+                ORDER BY scheduled_start_utc DESC, updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*values, limit, offset),
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+
+
+def _count_meetings(params: dict[str, list[str]]) -> int:
+    settings = load_settings()
+    where, values = _meeting_filter_sql(params)
+    conn = connect(settings.db_path)
+    try:
+        row = conn.execute(f"SELECT COUNT(*) AS total FROM meetings {where}", values).fetchone()
+        return int(row["total"] if row else 0)
+    finally:
+        conn.close()
+
+
+def _meeting_filter_sql(params: dict[str, list[str]]) -> tuple[str, tuple]:
+    clauses = []
+    values: list[str] = []
+    title = _first_param(params, "title") or _first_param(params, "name") or _first_param(params, "q")
+    if title:
+        clauses.append("LOWER(title) LIKE ?")
+        values.append(f"%{title.lower()}%")
+    code = _first_param(params, "meet_code") or _first_param(params, "code")
+    if code:
+        meet_code = _normalize_meet_code(code)
+        if not meet_code:
+            raise ValueError("invalid Meet code")
+        clauses.append("meet_code = ?")
+        values.append(meet_code)
+    status = _first_param(params, "status")
+    if status:
+        clauses.append("status = ?")
+        values.append(status)
+    start_from = _range_boundary(
+        _first_param(params, "from") or _first_param(params, "start_from") or _first_param(params, "date_from"),
+        end=False,
+    )
+    start_to = _range_boundary(
+        _first_param(params, "to") or _first_param(params, "start_to") or _first_param(params, "date_to"),
+        end=True,
+    )
+    if start_from:
+        clauses.append("scheduled_start_utc >= ?")
+        values.append(start_from)
+    if start_to:
+        clauses.append("scheduled_start_utc <= ?")
+        values.append(start_to)
+    return ("WHERE " + " AND ".join(clauses) if clauses else "", tuple(values))
+
+
+def _api_meeting_payload(meeting: dict, include_content: bool = False) -> dict:
+    detail = meeting if "files" in meeting else _meeting_detail(str(meeting["meet_code"]))
+    files = detail.get("files", {})
+    metadata = {
+        "meet_code": detail.get("meet_code"),
+        "event_id": detail.get("event_id"),
+        "title": detail.get("title"),
+        "status": detail.get("status"),
+        "organizer": detail.get("organizer"),
+        "attendees": detail.get("attendees", []),
+        "scheduled_start_utc": detail.get("scheduled_start_utc"),
+        "scheduled_end_utc": detail.get("scheduled_end_utc"),
+        "delivered_at": detail.get("delivered_at"),
+        "attempts": detail.get("attempts"),
+        "last_error": detail.get("last_error"),
+        "created_at": detail.get("created_at"),
+        "updated_at": detail.get("updated_at"),
+    }
+    payload = dict(metadata)
+    payload["metadata"] = metadata
+    payload["files"] = {key: _public_file_payload(value, include_content) for key, value in files.items()}
+    if include_content:
+        payload["transcript"] = files.get("transcript", {}).get("content")
+        payload["summary"] = files.get("summary", {}).get("content")
+        payload["meeting_minutes"] = files.get("minutes", {}).get("content")
+        payload["notes"] = files.get("notes", {}).get("content")
+    return payload
+
+
+def _public_file_payload(file_payload: dict, include_content: bool) -> dict:
+    if isinstance(file_payload, list):
+        return [_public_file_payload(item, include_content) for item in file_payload]
+    payload = {key: value for key, value in file_payload.items() if key != "content"}
+    if include_content and "content" in file_payload:
+        payload["content"] = file_payload["content"]
+    return payload
+
+
+def _api_filter_echo(params: dict[str, list[str]]) -> dict:
+    keys = ("q", "title", "name", "meet_code", "code", "status", "from", "to", "start_from", "start_to", "date_from", "date_to")
+    return {key: _first_param(params, key) for key in keys if _first_param(params, key)}
+
+
+def _first_param(params: dict[str, list[str]], key: str) -> str:
+    values = params.get(key) or []
+    return values[0].strip() if values and values[0] is not None else ""
+
+
+def _bounded_int(value: str, default: int, minimum: int, maximum: int) -> int:
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError("limit/offset must be integers") from exc
+    return min(max(parsed, minimum), maximum)
+
+
+def _truthy(value: str) -> bool:
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _range_boundary(value: str, end: bool) -> str:
+    if not value:
+        return ""
+    raw = value.strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return f"{raw}T23:59:59.999999" if end else f"{raw}T00:00:00"
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+    except ValueError as exc:
+        raise ValueError(f"invalid date/time filter: {raw}") from exc
 
 
 def _meeting_detail(meet_code: str) -> dict:

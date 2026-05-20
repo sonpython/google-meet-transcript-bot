@@ -65,6 +65,31 @@ Run the watcher after configuring `.env` and `client_secrets.json`:
 uv run python -m src.main
 ```
 
+## Chatbot API
+
+The admin token also works as the API key. Send it as either:
+
+```bash
+Authorization: Bearer $ADMIN_TOKEN
+X-API-Key: $ADMIN_TOKEN
+```
+
+Endpoints:
+
+- `GET /api/meetings` lists meetings and metadata. Filters: `title` or `q`, `meet_code` or `code`, `status`, `from`, `to`, `limit`, `offset`.
+- `GET /api/meetings/{meet_code}` returns one meeting with metadata, transcript, summary, meeting minutes, notes, and file metadata.
+- `GET /api/transcripts` searches by the same filters and returns matching meetings with transcript content included.
+
+Examples:
+
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "https://meet-assistant.example.com/api/meetings?from=2026-05-20&to=2026-05-20&q=sync"
+
+curl -H "X-API-Key: $ADMIN_TOKEN" \
+  "https://meet-assistant.example.com/api/meetings/abc-defg-hij"
+```
+
 The first Calendar OAuth run opens a browser and stores the refresh token encrypted at `TOKEN_STORE_PATH`. The bot account login is separate and uses `scripts/bot_first_login.py`.
 
 ## Required Accounts And Secrets
