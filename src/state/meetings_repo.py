@@ -19,12 +19,13 @@ class MeetingsRepo:
             self.conn.execute(
                 """
                 UPDATE meetings
-                SET event_id=?, scheduled_start_utc=?, title=?, organizer=?, attendees=?, updated_at=CURRENT_TIMESTAMP
+                SET event_id=?, scheduled_start_utc=?, scheduled_end_utc=?, title=?, organizer=?, attendees=?, updated_at=CURRENT_TIMESTAMP
                 WHERE meet_code=?
                 """,
                 (
                     meeting.event_id,
                     meeting.start_utc.isoformat(),
+                    meeting.end_utc.isoformat() if meeting.end_utc else None,
                     meeting.title,
                     meeting.organizer,
                     json.dumps(list(meeting.attendees), ensure_ascii=False),
@@ -35,13 +36,14 @@ class MeetingsRepo:
             return False
         self.conn.execute(
             """
-            INSERT INTO meetings (meet_code, event_id, scheduled_start_utc, title, organizer, attendees, status)
-            VALUES (?, ?, ?, ?, ?, ?, 'scheduled')
+            INSERT INTO meetings (meet_code, event_id, scheduled_start_utc, scheduled_end_utc, title, organizer, attendees, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled')
             """,
             (
                 meeting.meet_code,
                 meeting.event_id,
                 meeting.start_utc.isoformat(),
+                meeting.end_utc.isoformat() if meeting.end_utc else None,
                 meeting.title,
                 meeting.organizer,
                 json.dumps(list(meeting.attendees), ensure_ascii=False),

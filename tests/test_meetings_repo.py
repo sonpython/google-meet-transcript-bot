@@ -11,6 +11,7 @@ def _event(code: str = "abc-defg-hij") -> MeetingEvent:
         meet_code=code,
         event_id="event-1",
         start_utc=datetime(2026, 5, 20, 9, 0, tzinfo=UTC),
+        end_utc=datetime(2026, 5, 20, 10, 0, tzinfo=UTC),
         title="Weekly Sync",
         organizer="owner@example.com",
         attendees=("a@example.com",),

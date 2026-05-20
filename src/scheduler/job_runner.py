@@ -62,6 +62,7 @@ def _row_to_meeting_event(row: Row) -> MeetingEvent:
         meet_code=row["meet_code"],
         event_id=row["event_id"],
         start_utc=datetime.fromisoformat(row["scheduled_start_utc"]).astimezone(UTC),
+        end_utc=datetime.fromisoformat(row["scheduled_end_utc"]).astimezone(UTC) if row["scheduled_end_utc"] else None,
         title=row["title"],
         organizer=None,
         attendees=(),

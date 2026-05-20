@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS meetings (
     meet_code TEXT PRIMARY KEY,
     event_id TEXT NOT NULL,
     scheduled_start_utc TEXT NOT NULL,
+    scheduled_end_utc TEXT,
     title TEXT NOT NULL,
     organizer TEXT,
     attendees TEXT,
@@ -57,6 +58,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
     _ensure_column(conn, "meetings", "minutes_path", "TEXT")
     _ensure_column(conn, "meetings", "organizer", "TEXT")
     _ensure_column(conn, "meetings", "attendees", "TEXT")
+    _ensure_column(conn, "meetings", "scheduled_end_utc", "TEXT")
     return conn
 
 

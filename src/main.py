@@ -155,6 +155,7 @@ async def _run_admin_command_loop(repo: MeetingsRepo, runner: JobRunner) -> None
                     meet_code=row["meet_code"],
                     event_id=row["event_id"],
                     start_utc=datetime.now(UTC),
+                    end_utc=None,
                     title=row["title"],
                     organizer=None,
                     attendees=(),

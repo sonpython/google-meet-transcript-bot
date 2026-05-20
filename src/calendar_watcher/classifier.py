@@ -36,6 +36,7 @@ def to_meeting_event(event: dict[str, Any], user_email: str) -> MeetingEvent | N
         meet_code=_meet_code(meet_url),
         event_id=str(event.get("id", "")),
         start_utc=start_utc,
+        end_utc=_parse_end(event),
         title=str(event.get("summary") or "Untitled meeting"),
         organizer=_raw_email(event.get("organizer")),
         attendees=attendees,
@@ -73,6 +74,14 @@ def _meet_code(url: str) -> str:
 
 def _parse_start(event: dict[str, Any]) -> datetime | None:
     raw = event.get("start", {}).get("dateTime")
+    if not raw:
+        return None
+    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    return parsed.astimezone(UTC)
+
+
+def _parse_end(event: dict[str, Any]) -> datetime | None:
+    raw = event.get("end", {}).get("dateTime")
     if not raw:
         return None
     parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
