@@ -37,14 +37,26 @@ class MeetJoiner:
     async def _click_first_visible(self, page, selectors: list[str]) -> bool:
         for selector in selectors:
             locator = page.locator(selector)
-            if await locator.count():
-                await locator.first.click()
-                return True
+            for index in range(await locator.count()):
+                button = locator.nth(index)
+                try:
+                    if not await button.is_visible() or not await button.is_enabled():
+                        continue
+                    await button.click(timeout=1000)
+                    return True
+                except Exception:
+                    continue
         return False
 
     async def _wait_for_outcome(self, page, timeout: int) -> JoinResult:
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
+            if await self._click_visible(page, sel.CONSENT_JOIN_NOW_BTN):
+                await asyncio.sleep(1)
+                continue
+            if await self._click_visible(page, sel.GOT_IT_BTN):
+                await asyncio.sleep(1)
+                continue
             if await page.locator(sel.LEAVE_BTN).count():
                 return JoinResult("admitted", joined_at=datetime.now(UTC))
             if await page.locator(sel.RISK_QUEUE_TEXT).count():
@@ -53,3 +65,15 @@ class MeetJoiner:
                 return JoinResult("denied", error_msg="host denied or did not respond")
             await asyncio.sleep(2)
         return JoinResult("timeout", error_msg="join wait timed out")
+
+    async def _click_visible(self, page, selector: str) -> bool:
+        locator = page.locator(selector)
+        for index in range(await locator.count()):
+            button = locator.nth(index)
+            try:
+                if await button.is_visible() and await button.is_enabled():
+                    await button.click(timeout=1000)
+                    return True
+            except Exception:
+                continue
+        return False
