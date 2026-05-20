@@ -81,7 +81,7 @@ class FakeMeetMonitor:
         pass
 
     async def run_until_exit(self):
-        return "alone_timeout", ["Host", "Bot"], 30
+        return "alone_timeout", ["Host", "Bot"], 30, datetime(2026, 5, 20, tzinfo=UTC)
 
 
 def meeting(code: str) -> MeetingEvent:

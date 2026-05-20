@@ -58,7 +58,7 @@ class MeetingSession:
                 return
             audio_path = recorder.start(meeting.meet_code, audio_source=monitor_source)
             self.repo.mark_status(meeting.meet_code, "recording", audio_path=str(audio_path))
-            reason, participants, duration = await MeetMonitor(
+            reason, participants, duration, actual_end = await MeetMonitor(
                 session.page,
                 should_force_exit=lambda: self._claim_force_out(meeting.meet_code),
             ).run_until_exit()
@@ -66,7 +66,13 @@ class MeetingSession:
             await session.close()
             session = None
             if reason == "no_one_joined":
-                self.repo.mark_status(meeting.meet_code, "no_one_joined", None, audio_path=str(final_path))
+                self.repo.mark_status(
+                    meeting.meet_code,
+                    "no_one_joined",
+                    None,
+                    audio_path=str(final_path),
+                    actual_end_utc=meeting.start_utc.isoformat(),
+                )
                 self._cleanup_audio()
                 return
             result = MeetingResult(
@@ -76,8 +82,14 @@ class MeetingSession:
                 reason,
                 participants,
                 meeting.title,
+                actual_end,
             )
-            self.repo.mark_status(meeting.meet_code, "processing", audio_path=str(final_path))
+            self.repo.mark_status(
+                meeting.meet_code,
+                "processing",
+                audio_path=str(final_path),
+                actual_end_utc=actual_end.isoformat(),
+            )
             output_paths = await self.process_result(result)
             notes_path, extra_paths = _normalize_output_paths(output_paths)
             self.repo.mark_delivered(meeting.meet_code, str(notes_path), **extra_paths)

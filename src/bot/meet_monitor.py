@@ -35,7 +35,7 @@ class MeetMonitor:
         self.detector = ExitDetector()
         self.participants = ParticipantTracker()
 
-    async def run_until_exit(self) -> tuple[str, tuple[str, ...], int]:
+    async def run_until_exit(self) -> tuple[str, tuple[str, ...], int, datetime]:
         started = self.clock()
         alone_since: datetime | None = None
         had_company = False
@@ -43,22 +43,22 @@ class MeetMonitor:
         while True:
             now = self.clock()
             if (now - started).total_seconds() >= self.max_duration:
-                return "hard_cap", tuple(last_participants), int((now - started).total_seconds())
+                return "hard_cap", tuple(last_participants), int((now - started).total_seconds()), now
             last_participants = await self.participants.get_participants(self.page)
             if await self._should_force_exit():
-                return "force_out", tuple(last_participants), int((now - started).total_seconds())
+                return "force_out", tuple(last_participants), int((now - started).total_seconds()), now
             if len(last_participants) > 1:
                 had_company = True
             if not had_company and (now - started).total_seconds() >= self.no_one_joined_timeout_seconds:
-                return "no_one_joined", tuple(last_participants), int((now - started).total_seconds())
+                return "no_one_joined", tuple(last_participants), int((now - started).total_seconds()), started
             reason = await self.detector.check_exit_signal(self.page, len(last_participants) or None)
             if reason and reason != "alone_signal":
-                return reason, tuple(last_participants), int((now - started).total_seconds())
+                return reason, tuple(last_participants), int((now - started).total_seconds()), now
             can_end_after_company = (now - started).total_seconds() >= self.post_company_min_duration_seconds
             if reason == "alone_signal" and had_company and can_end_after_company:
                 alone_since = alone_since or now
                 if now - alone_since >= timedelta(seconds=self.alone_after_seconds):
-                    return "alone", tuple(last_participants), int((now - started).total_seconds())
+                    return "alone", tuple(last_participants), int((now - started).total_seconds()), alone_since
             else:
                 alone_since = None
             await self.sleep(self.poll_seconds)

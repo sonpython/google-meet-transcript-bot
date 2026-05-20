@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS meetings (
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
     delivered_at TEXT,
+    actual_end_utc TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -59,6 +60,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
     _ensure_column(conn, "meetings", "organizer", "TEXT")
     _ensure_column(conn, "meetings", "attendees", "TEXT")
     _ensure_column(conn, "meetings", "scheduled_end_utc", "TEXT")
+    _ensure_column(conn, "meetings", "actual_end_utc", "TEXT")
     return conn
 
 

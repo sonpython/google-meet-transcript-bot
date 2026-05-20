@@ -54,11 +54,12 @@ async def test_no_one_joined_times_out_after_30_minutes() -> None:
     clock = FakeClock(datetime(2026, 5, 20, tzinfo=UTC))
     monitor = _monitor([["bot"]] * 40, clock)
 
-    reason, participants, duration = await monitor.run_until_exit()
+    reason, participants, duration, actual_end = await monitor.run_until_exit()
 
     assert reason == "no_one_joined"
     assert participants == ("bot",)
     assert duration == 30 * 60
+    assert actual_end == datetime(2026, 5, 20, tzinfo=UTC)
 
 
 @pytest.mark.anyio
@@ -67,11 +68,12 @@ async def test_alone_timeout_starts_after_10_minutes_when_people_left() -> None:
     participants = [["bot", "An"]] * 2 + [["bot"]] * 20
     monitor = _monitor(participants, clock)
 
-    reason, participants, duration = await monitor.run_until_exit()
+    reason, participants, duration, actual_end = await monitor.run_until_exit()
 
     assert reason == "alone"
     assert participants == ("bot",)
     assert duration == 15 * 60
+    assert actual_end == datetime(2026, 5, 20, 0, 10, tzinfo=UTC)
 
 
 @pytest.mark.anyio
@@ -80,11 +82,12 @@ async def test_alone_timeout_after_10_minutes_waits_5_minutes() -> None:
     participants = [["bot", "An"]] * 12 + [["bot"]] * 10
     monitor = _monitor(participants, clock)
 
-    reason, participants, duration = await monitor.run_until_exit()
+    reason, participants, duration, actual_end = await monitor.run_until_exit()
 
     assert reason == "alone"
     assert participants == ("bot",)
     assert duration == 17 * 60
+    assert actual_end == datetime(2026, 5, 20, 0, 12, tzinfo=UTC)
 
 
 @pytest.mark.anyio
@@ -93,8 +96,9 @@ async def test_force_exit_returns_immediately() -> None:
     monitor = _monitor([["bot", "An"]], clock)
     monitor.should_force_exit = lambda: True
 
-    reason, participants, duration = await monitor.run_until_exit()
+    reason, participants, duration, actual_end = await monitor.run_until_exit()
 
     assert reason == "force_out"
     assert participants == ("bot", "An")
     assert duration == 0
+    assert actual_end == datetime(2026, 5, 20, tzinfo=UTC)

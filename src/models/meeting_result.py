@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 
@@ -10,3 +11,4 @@ class MeetingResult:
     exit_reason: str
     participant_names: tuple[str, ...]
     title: str = ""
+    actual_end_utc: datetime | None = None
