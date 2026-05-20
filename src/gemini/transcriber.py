@@ -1,4 +1,6 @@
+import asyncio
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from src.gemini.audio_chunker import AudioChunker
 
@@ -22,16 +24,43 @@ class Transcriber:
                 f"Chunk {index}/{len(chunks)} starts at +{chunk.offset_seconds} seconds. "
                 "Use this offset as the reliable time anchor. Do not invent absolute timestamps."
             )
-            text = await self.client.generate_from_audio(chunk.path, chunk_prompt)
-            if has_hallucination_loop(text):
-                text = await self.client.generate_from_audio(
-                    chunk.path,
-                    chunk_prompt + "\n\nRetry with concise, non-repetitive transcript only.",
-                )
-            if has_hallucination_loop(text):
-                raise RuntimeError(f"Gemini transcription loop detected in chunk {index}")
+            text = await _retry_chunk(
+                lambda chunk_path=chunk.path, prompt_text=chunk_prompt: self._transcribe_chunk(
+                    chunk_path,
+                    prompt_text,
+                    index,
+                ),
+                index,
+            )
             transcript_parts.append(f"## Chunk {index} (+{chunk.offset_seconds}s)\n\n{text.strip()}")
         return "\n\n".join(transcript_parts).strip()
+
+    async def _transcribe_chunk(self, audio_path: Path, prompt: str, index: int) -> str:
+        text = await self.client.generate_from_audio(audio_path, prompt)
+        if has_hallucination_loop(text):
+            text = await self.client.generate_from_audio(
+                audio_path,
+                prompt + "\n\nRetry with concise, non-repetitive transcript only.",
+            )
+        if has_hallucination_loop(text):
+            raise RuntimeError(f"Gemini transcription loop detected in chunk {index}")
+        return text
+
+
+async def _retry_chunk(operation: Callable[[], Awaitable[str]], index: int) -> str:
+    delays = (60, 180, 300)
+    last_error: Exception | None = None
+    for attempt in range(len(delays) + 1):
+        try:
+            return await operation()
+        except Exception as exc:
+            last_error = exc
+            if attempt < len(delays):
+                await asyncio.sleep(delays[attempt])
+    return (
+        f"[CHUNK_TRANSCRIBE_FAILED] Chunk {index} failed after {len(delays) + 1} attempts. "
+        f"Error: {last_error}"
+    )
 
 
 def _build_prompt(participants: tuple[str, ...], title: str) -> str:

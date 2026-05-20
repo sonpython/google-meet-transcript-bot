@@ -1,11 +1,10 @@
 import asyncio
 from pathlib import Path
 
-import pytest
-
 from src.gemini.audio_chunker import AudioChunk
 from src.gemini.pipeline import GeminiPipeline
 from src.gemini.summarizer import sanitize_minutes
+from src.gemini import transcriber as transcriber_module
 from src.gemini.transcriber import Transcriber, has_hallucination_loop
 from src.models.meeting_result import MeetingResult
 
@@ -54,15 +53,21 @@ def test_transcriber_chunks_audio_with_offsets(tmp_path: Path) -> None:
     assert "+840 seconds" in client.audio_calls[1][1]
 
 
-def test_transcriber_raises_after_repeated_loop(tmp_path: Path) -> None:
+def test_transcriber_marks_failed_chunk_after_repeated_loop(tmp_path: Path, monkeypatch) -> None:
     class LoopClient(FakeGeminiClient):
         async def generate_from_audio(self, audio_path: Path, prompt: str) -> str:
             return "\n".join(["đó"] * 31)
 
+    async def no_sleep(_delay: int) -> None:
+        return None
+
+    monkeypatch.setattr(transcriber_module.asyncio, "sleep", no_sleep)
     transcriber = Transcriber(LoopClient(), chunker=FakeChunker(), work_dir=tmp_path / "chunks")
 
-    with pytest.raises(RuntimeError, match="loop detected"):
-        asyncio.run(transcriber.transcribe(tmp_path / "meeting.opus", (), ""))
+    transcript = asyncio.run(transcriber.transcribe(tmp_path / "meeting.opus", (), ""))
+
+    assert "[CHUNK_TRANSCRIBE_FAILED] Chunk 1 failed after 4 attempts" in transcript
+    assert "[CHUNK_TRANSCRIBE_FAILED] Chunk 2 failed after 4 attempts" in transcript
 
 
 def test_pipeline_writes_outputs(tmp_path: Path) -> None:

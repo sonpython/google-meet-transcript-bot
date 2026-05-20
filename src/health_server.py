@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 from datetime import UTC, datetime
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -198,7 +199,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         self.send_response(200)
-        self.send_header("Content-Type", "audio/ogg")
+        self.send_header("Content-Type", "audio/ogg; codecs=opus")
         self.send_header("Content-Length", str(path.stat().st_size))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -409,7 +410,7 @@ def _meeting_detail(meet_code: str) -> dict:
     files = {}
     for key, path in paths.items():
         files[key] = _file_payload(path)
-    files["audio_segments"] = [_file_payload(path) for path in _audio_segment_paths(meet_code, settings.audio_dir)]
+    files["audio_segments"] = _audio_segment_payloads(_audio_segment_paths(meet_code, settings.audio_dir))
     meeting["files"] = files
     meeting["metadata"] = {
         "meet_code": meeting.get("meet_code"),
@@ -623,6 +624,45 @@ def _audio_segment_paths(meet_code: str, audio_dir: Path) -> list[Path]:
     return paths
 
 
+def _audio_segment_payloads(paths: list[Path]) -> list[dict]:
+    payloads = []
+    cursor = 0
+    for index, path in enumerate(paths):
+        payload = _file_payload(path)
+        payload["index"] = index
+        payload["duration_seconds"] = _audio_duration_seconds(path) if payload.get("exists") else 0
+        payload["start_second"] = cursor
+        cursor += int(payload["duration_seconds"] or 0)
+        payload["end_second"] = cursor
+        payloads.append(payload)
+    return payloads
+
+
+def _audio_duration_seconds(path: Path) -> int:
+    if not path.exists() or path.stat().st_size <= 0:
+        return 0
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        return max(0, int(float(proc.stdout.strip() or "0")))
+    except Exception:
+        return 0
+
+
 def _file_payload(path: Path | None) -> dict:
     if not path:
         return {"exists": False}
@@ -741,8 +781,8 @@ button,input,.button-link{height:32px;border:1px solid #334155;background:#18223
 .timeline{padding:0}.day-group{border-bottom:1px solid #243044}.day-stamp{display:flex;align-items:baseline;gap:8px;padding:9px 16px;background:#0b1220;color:#cbd5e1;border-bottom:1px solid #243044}.day-num{font-size:18px;font-weight:800;line-height:1;color:#f8fafc}.day-label{color:#94a3b8;font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.timeline-row{position:relative;display:grid;grid-template-columns:18px minmax(68px,86px) minmax(0,1fr);gap:12px;padding:12px 14px;border-bottom:1px solid #1d2736;cursor:pointer}.timeline-row:last-child{border-bottom:0}.timeline-row:hover,.timeline-row.selected{background:#141d2d}.timeline-row.selected{box-shadow:inset 3px 0 0 #38bdf8}.timeline-dot{width:9px;height:9px;margin-top:5px;border-radius:999px;border:2px solid #38bdf8;background:#38bdf8}.timeline-dot.empty{background:transparent}.timeline-time{color:#d1d5db;font-size:14px;line-height:1.35;white-space:nowrap}.timeline-main{min-width:0}.timeline-title-row,.timeline-meta-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}.timeline-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f3f4f6;font-size:15px;font-weight:700}.timeline-code{justify-self:end}.timeline-meta-row{margin-top:4px}.timeline-range{color:#94a3b8;font-size:11px}.timeline-empty{padding:16px;color:#94a3b8}.meet-code{display:inline-flex;align-items:center;gap:5px;max-width:100%;vertical-align:middle}.meet-code-text{color:#94a3b8;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}.meet-code-actions{display:inline-flex;align-items:center;gap:3px}.icon-btn{width:24px;height:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:transparent;border:1px solid transparent;border-radius:5px;color:#94a3b8;text-decoration:none}.icon-btn:hover{background:#1e293b;border-color:#334155;color:#e5e7eb}.icon-btn svg{width:13px;height:13px}
 .pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;border-top:1px solid #263244}.pagination .pager-actions{display:flex;gap:8px}.pagination button:disabled{opacity:.45;cursor:not-allowed}
 .muted{color:#94a3b8}.status{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 8px;background:#1e293b;color:#c7d2fe;font-size:12px;line-height:1.35}.status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}.status.failed{background:#451a1a;color:#fecaca}.status.delivered{background:#102f20;color:#86efac}.status.no_one_joined{background:#1f2937;color:#cbd5e1}.status.recording,.status.processing{background:#422006;color:#fde68a}.status.scheduled{background:#172554;color:#93c5fd}.status.joining{background:#312e81;color:#c4b5fd}.status.upcoming{background:#0c2d48;color:#7dd3fc}.status.checking{background:#172554;color:#bfdbfe}.status.checking .dots span{animation:dotPulse 1.2s infinite;opacity:.25}.status.checking .dots span:nth-child(2){animation-delay:.2s}.status.checking .dots span:nth-child(3){animation-delay:.4s}@keyframes dotPulse{0%,80%,100%{opacity:.25}40%{opacity:1}}
-.detail{min-height:520px}.empty-detail{padding:14px}.detail-body{padding:14px}.kv{display:grid;grid-template-columns:160px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid #1f2937}.code-block{margin:12px 0 18px;border:1px solid #263244;border-radius:8px;overflow:hidden;background:#050914}.code-head{height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#111827;border-bottom:1px solid #263244}.code-head h3{font-size:13px}.copy-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}.copy-btn svg{width:15px;height:15px}.copied{background:#103224!important;border-color:#166534!important;color:#86efac!important}pre{white-space:pre-wrap;background:#050914;color:#e5e7eb;margin:0;padding:12px;max-height:360px;overflow:auto}
-.login{min-height:100vh;display:grid;place-items:center;background:#070b12}.login-box{width:min(360px,calc(100vw - 32px));background:#0f172a;border:1px solid #263244;border-radius:8px;padding:20px;display:flex;flex-direction:column;gap:10px}.login-box input{height:36px;border:1px solid #334155;background:#070b12;color:#e5e7eb;border-radius:6px;padding:0 10px}.error{color:#fca5a5;margin:0}audio{width:min(560px,100%);height:34px;filter:invert(1) hue-rotate(180deg)}
+.detail{min-height:520px}.empty-detail{padding:14px}.detail-body{padding:14px}.kv{display:grid;grid-template-columns:160px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid #1f2937}.code-block{margin:12px 0 18px;border:1px solid #263244;border-radius:8px;overflow:hidden;background:#050914}.code-head{height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#111827;border-bottom:1px solid #263244}.code-head h3{font-size:13px}.code-actions{display:flex;align-items:center;gap:6px}.copy-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}.copy-btn svg{width:15px;height:15px}.copied{background:#103224!important;border-color:#166534!important;color:#86efac!important}pre{white-space:pre-wrap;background:#050914;color:#e5e7eb;margin:0;padding:12px;max-height:360px;overflow:auto}
+.continuous-player{display:flex;flex-direction:column;gap:8px;max-width:680px}.audio-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.audio-main{min-width:72px}.segments-row{display:flex;flex-wrap:wrap;gap:6px}.segment-chip{height:28px;padding:0 8px;border-radius:999px;font-size:12px;display:inline-flex;align-items:center;gap:5px}.segment-chip span{color:#94a3b8;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}.segment-chip.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}.segment-chip.active span{color:#bae6fd}.progress-bar{height:8px;background:#1f2937;border-radius:999px;cursor:pointer;overflow:hidden;border:1px solid #334155}.progress-fill{height:100%;width:0;background:#38bdf8;border-radius:999px}.rate-btns{display:flex;gap:4px}.rate-btn{height:26px;padding:0 7px;font-size:12px}.rate-btn.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}.audio-note{font-size:12px}.login{min-height:100vh;display:grid;place-items:center;background:#070b12}.login-box{width:min(360px,calc(100vw - 32px));background:#0f172a;border:1px solid #263244;border-radius:8px;padding:20px;display:flex;flex-direction:column;gap:10px}.login-box input{height:36px;border:1px solid #334155;background:#070b12;color:#e5e7eb;border-radius:6px;padding:0 10px}.error{color:#fca5a5;margin:0}audio{width:min(560px,100%);height:34px}
 @media(max-width:900px){.grid{grid-template-columns:1fr}.filters,.settings-row,.manual-join{grid-template-columns:1fr 1fr}.manual-join input{grid-column:1/-1}.settings-row label{grid-column:1/-1}.timeline-row{grid-template-columns:16px 74px minmax(0,1fr);gap:10px;padding:11px 10px}.timeline-time{font-size:13px}.timeline-title{font-size:15px}.timeline-title-row,.timeline-meta-row{grid-template-columns:1fr}.timeline-code{justify-self:start}.meet-code{flex-wrap:wrap}.meet-code-text{white-space:normal;overflow-wrap:anywhere}}
 </style>"""
 
@@ -786,7 +826,7 @@ function timeText(v){if(!v)return ''; try{return new Date(v).toLocaleTimeString(
 function normalizeMeetCode(value){const match=String(value||'').trim().toLowerCase().match(/([a-z]{3})-?([a-z]{4})-?([a-z]{3})/); return match?`${match[1]}-${match[2]}-${match[3]}`:'';}
 async function loadDetail(code,{push=true}={}){selectedMeeting=code; if(push)updateUrl({code,page:currentPage}); const d=await api('meetings/'+encodeURIComponent(code)); const m=d.meeting; const files=m.files||{}; if(pendingAction?.code===code&&m.status!==pendingAction.fromStatus)pendingAction=null; const statusHtml=pendingAction?.code===code?checkingBadge():badge(m.status); renderMeetings(currentPage,{push:false}); document.getElementById('detail').innerHTML=`<div class="detail-body"><h3>${esc(m.title)}</h3><p>${actionButtons(m)}</p>
 ${kv('Status',statusHtml)}${kv('Meet code',meetCodeTools(m.meet_code))}${kv('Event ID',esc(m.event_id))}${kv('Host',esc(m.organizer||''))}${kv('Attendees',attendeeList(m.attendees))}${kv('Start',fmt(m.scheduled_start_utc))}${kv('End',fmt(m.scheduled_end_utc))}${kv('Delivered',fmt(m.delivered_at))}${kv('Audio',fileLine(files.audio))}${kv('Listen',audioPlayer(m))}${kv('Notes',fileLine(files.notes))}${kv('Minutes',fileLine(files.minutes))}${kv('Transcript',fileLine(files.transcript))}${m.last_error?kv('Error',esc(m.last_error)):''}
-${codeBlock('Summary',files.summary?.content||'')}${codeBlock('Meeting Minutes',files.minutes?.content||'')}${codeBlock('Transcript',files.transcript?.content||'')}${codeBlock('Notes',files.notes?.content||'')}</div>`;}
+${codeBlock('Summary',files.summary?.content||'')}${codeBlock('Meeting Minutes',files.minutes?.content||'',{pdf:true})}${codeBlock('Transcript',files.transcript?.content||'')}${codeBlock('Notes',files.notes?.content||'')}</div>`; initAudioPlayers();}
 function actionButtons(m){const rejoin=`<button onclick="rejoin('${esc(m.meet_code)}')">Rejoin</button>`; const out=m.status==='recording'?` <button class="danger" onclick="forceOut('${esc(m.meet_code)}')">Out</button>`:''; return rejoin+out;}
 function swalOptions(extra){return {background:'#0f172a',color:'#e5e7eb',confirmButtonColor:'#2563eb',cancelButtonColor:'#475569',...extra};}
 async function notify(icon,title,text=''){if(window.Swal){await Swal.fire(swalOptions({icon,title,text,toast:true,position:'top-end',timer:1800,showConfirmButton:false,timerProgressBar:true}));return;} console[icon==='error'?'error':'log']([title,text].filter(Boolean).join(' '));}
@@ -805,8 +845,21 @@ function copyIcon(){return `<svg aria-hidden="true" viewBox="0 0 24 24" fill="no
 function linkIcon(){return `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.07 0l3.54-3.54a5 5 0 0 0-7.07-7.07L11.5 4.43"></path><path d="M14 11a5 5 0 0 0-7.07 0L3.39 14.54a5 5 0 0 0 7.07 7.07l2.04-2.04"></path></svg>`;}
 function attendeeList(v){if(Array.isArray(v)&&v.length)return v.map(esc).join('<br>'); return 'missing';}
 function fileLine(f){return f?.exists?`${esc(f.path)} <span class="muted">(${f.size} bytes)</span>`:'missing'}
-function audioPlayer(m){const segments=m.files?.audio_segments||[]; if(!segments.length)return 'missing'; return segments.map((f,i)=>`<div><span class="muted">Segment ${i+1}</span><br><audio controls preload="none" src="/admin/api/meetings/${encodeURIComponent(m.meet_code)}/audio?index=${i}"></audio></div>`).join('');}
-function codeBlock(title,content){const id='code_'+Math.random().toString(36).slice(2); return `<section class="code-block"><div class="code-head"><h3>${esc(title)}</h3><button class="copy-btn" onclick="copyCode('${id}',this)" title="Copy all" aria-label="Copy all"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button></div><pre id="${id}">${esc(content)}</pre></section>`}
+let continuousPlayer=null;
+function audioPlayer(m){const segments=(m.files?.audio_segments||[]).filter(f=>f?.exists&&f?.size>0&&f?.duration_seconds>0); if(!segments.length)return 'missing'; const encoded=esc(JSON.stringify(segments.map((s,i)=>({index:i,sourceIndex:s.index??i,start_second:s.start_second??0,end_second:s.end_second??0,duration_seconds:s.duration_seconds??0,size:s.size??0})))); const buttons=segments.map((f,i)=>`<button class="segment-chip" data-index="${i}" onclick="loadSegment(${i},0,true)">S${i+1}<span>${formatDuration(f.duration_seconds||0)}</span></button>`).join(''); const total=segments[segments.length-1]?.end_second||0; return `<div class="continuous-player" data-meet-code="${esc(m.meet_code)}" data-segments="${encoded}"><div class="audio-toolbar"><button class="audio-main" onclick="toggleContinuousAudio()">Play</button><span id="audioNow" class="muted">Segment 1 / ${segments.length}</span><span id="audioTime" class="muted">0:00 / ${formatDuration(total)}</span><div class="rate-btns"><button class="rate-btn active" onclick="setPlaybackRate(1,this)">x1</button><button class="rate-btn" onclick="setPlaybackRate(2,this)">x2</button><button class="rate-btn" onclick="setPlaybackRate(4,this)">x4</button></div></div><audio id="continuousAudio" preload="metadata"></audio><div class="progress-bar" onclick="onAudioProgressClick(event)" role="slider" tabindex="0" aria-label="Seek"><div id="audioProgress" class="progress-fill"></div></div><div class="segments-row">${buttons}</div><div class="audio-note muted">Continuous playback across saved chunks; each chip remains a real segment, no long audio merge.</div></div>`;}
+function initAudioPlayers(){continuousPlayer=null; const root=document.querySelector('.continuous-player'); if(!root)return; const audio=document.getElementById('continuousAudio'); const meetCode=root.dataset.meetCode; let segments=[]; try{segments=JSON.parse(root.dataset.segments||'[]');}catch{} continuousPlayer={audio,segments,meetCode,index:0,playing:false,rate:1}; audio.addEventListener('loadedmetadata',updateAudioTime); audio.addEventListener('timeupdate',updateAudioTime); audio.addEventListener('play',()=>setAudioButton(true)); audio.addEventListener('pause',()=>setAudioButton(false)); audio.addEventListener('ended',()=>{if(!continuousPlayer)return; const next=continuousPlayer.index+1; if(next<continuousPlayer.segments.length){loadSegment(next,0,true);}else{setAudioButton(false);}}); loadSegment(0,0,false);}
+function audioSrc(segment){return `/admin/api/meetings/${encodeURIComponent(continuousPlayer.meetCode)}/audio?index=${segment.sourceIndex}`;}
+function loadSegment(index,offsetSec=0,autoPlay=false){if(!continuousPlayer)return; const segment=continuousPlayer.segments[index]; if(!segment)return; const audio=continuousPlayer.audio; continuousPlayer.index=index; audio.src=audioSrc(segment); audio.load(); audio.playbackRate=continuousPlayer.rate||1; audio.onloadedmetadata=()=>{audio.currentTime=Math.max(0,Math.min(offsetSec,Math.max(0,(audio.duration||segment.duration_seconds)-0.1))); updateAudioTime(); if(autoPlay)audio.play().catch(e=>notify('error','Audio failed',e.message||String(e)));}; document.querySelectorAll('.segment-chip').forEach((b,i)=>b.classList.toggle('active',i===index)); const now=document.getElementById('audioNow'); if(now)now.textContent=`Segment ${index+1} / ${continuousPlayer.segments.length}`; updateAudioTime();}
+function seekToAudio(absSeconds,autoPlay=true){if(!continuousPlayer||!continuousPlayer.segments.length)return; const first=continuousPlayer.segments[0]; const last=continuousPlayer.segments[continuousPlayer.segments.length-1]; const clamped=Math.min(Math.max(absSeconds,first.start_second),Math.max(first.start_second,last.end_second-0.1)); const idx=continuousPlayer.segments.findIndex(s=>clamped>=s.start_second&&clamped<s.end_second); if(idx>=0)loadSegment(idx,clamped-continuousPlayer.segments[idx].start_second,autoPlay);}
+function onAudioProgressClick(event){if(!continuousPlayer?.segments.length)return; const bar=event.currentTarget; const rect=bar.getBoundingClientRect(); const ratio=Math.min(1,Math.max(0,(event.clientX-rect.left)/rect.width)); const first=continuousPlayer.segments[0]; const last=continuousPlayer.segments[continuousPlayer.segments.length-1]; seekToAudio(first.start_second+ratio*(last.end_second-first.start_second),!continuousPlayer.audio.paused);}
+async function toggleContinuousAudio(){if(!continuousPlayer)return; if(continuousPlayer.audio.paused){try{await continuousPlayer.audio.play();}catch(e){await notify('error','Audio failed',e.message||String(e));}}else{continuousPlayer.audio.pause();}}
+function setPlaybackRate(rate,button){if(!continuousPlayer)return; continuousPlayer.rate=rate; continuousPlayer.audio.playbackRate=rate; document.querySelectorAll('.rate-btn').forEach(btn=>btn.classList.toggle('active',btn===button));}
+function setAudioButton(playing){const button=document.querySelector('.audio-main'); if(button)button.textContent=playing?'Pause':'Play';}
+function updateAudioTime(){if(!continuousPlayer)return; const audio=continuousPlayer.audio; const segment=continuousPlayer.segments[continuousPlayer.index]||{start_second:0}; const abs=(segment.start_second||0)+(audio.currentTime||0); const total=continuousPlayer.segments.at(-1)?.end_second||0; const el=document.getElementById('audioTime'); if(el)el.textContent=`${formatDuration(abs)} / ${formatDuration(total)}`; const progress=document.getElementById('audioProgress'); if(progress&&total>0){progress.style.width=`${Math.min(100,Math.max(0,(abs/total)*100))}%`;}}
+function formatDuration(seconds){seconds=Math.max(0,Math.round(seconds||0)); const h=Math.floor(seconds/3600); const m=Math.floor((seconds%3600)/60); const s=String(seconds%60).padStart(2,'0'); return h?`${h}:${String(m).padStart(2,'0')}:${s}`:`${m}:${s}`;}
+function codeBlock(title,content,options={}){const id='code_'+Math.random().toString(36).slice(2); const pdf=options.pdf?`<button class="copy-btn" onclick="downloadPdf('${id}','${esc(title)}')" title="Download PDF" aria-label="Download PDF">${downloadIcon()}</button>`:''; return `<section class="code-block"><div class="code-head"><h3>${esc(title)}</h3><div class="code-actions">${pdf}<button class="copy-btn" onclick="copyCode('${id}',this)" title="Copy all" aria-label="Copy all">${copyIcon()}</button></div></div><pre id="${id}">${esc(content)}</pre></section>`}
+function downloadIcon(){return `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path></svg>`;}
+function downloadPdf(id,title){const text=document.getElementById(id)?.textContent||''; const win=window.open('','_blank'); if(!win){notify('error','Popup blocked','Allow popups to export PDF.');return;} win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font-family:Arial,sans-serif;line-height:1.5;padding:32px;color:#111}pre{white-space:pre-wrap;font-family:Arial,sans-serif}</style></head><body><pre>${esc(text)}</pre><script>window.onload=()=>{window.print();setTimeout(()=>window.close(),500)}<\/script></body></html>`); win.document.close();}
 async function flashCopied(button){button.classList.add('copied'); setTimeout(()=>button.classList.remove('copied'),900);}
 async function copyCode(id,button){const text=document.getElementById(id)?.textContent||''; await navigator.clipboard.writeText(text); flashCopied(button);}
 async function copyText(text,button){await navigator.clipboard.writeText(text); flashCopied(button);}
