@@ -87,12 +87,12 @@ class FakeMeetMonitor:
         return "alone_timeout", ["Host", "Bot"], 30, datetime(2026, 5, 20, tzinfo=UTC)
 
 
-def meeting(code: str) -> MeetingEvent:
+def meeting(code: str, end_utc=None) -> MeetingEvent:
     return MeetingEvent(
         meet_code=code,
         event_id=code,
         start_utc=datetime.now(UTC),
-        end_utc=None,
+        end_utc=end_utc,
         title=code,
         organizer=None,
         attendees=(),
@@ -229,3 +229,38 @@ async def test_session_auto_rejoins_after_page_closed(tmp_path, monkeypatch) -> 
     assert PageClosedThenAloneMonitor.calls == 2
     assert removed == ["meet_capture_abc_defg_hij", "meet_capture_abc_defg_hij"]
     assert processed == ["abc-defg-hij-1.opus", "abc-defg-hij-2.opus"]
+
+
+@pytest.mark.anyio
+async def test_session_auto_rejoins_after_page_closed_even_after_calendar_end(tmp_path, monkeypatch) -> None:
+    class PageClosedThenAloneMonitor:
+        calls = 0
+
+        def __init__(self, page, should_force_exit):
+            pass
+
+        async def run_until_exit(self):
+            PageClosedThenAloneMonitor.calls += 1
+            if PageClosedThenAloneMonitor.calls == 1:
+                return "page_closed", ["Host", "Bot"], 10, datetime.now(UTC)
+            return "alone", ["Host", "Bot"], 20, datetime.now(UTC)
+
+    monkeypatch.setattr("src.bot.meeting_session.AUTO_REJOIN_DELAY_SECONDS", 0)
+    monkeypatch.setattr("src.bot.meeting_session.AudioRecorder", FakeRecorder)
+    monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", FakeMeetJoiner)
+    monkeypatch.setattr("src.bot.meeting_session.MeetMonitor", PageClosedThenAloneMonitor)
+    monkeypatch.setattr("src.bot.meeting_session.create_session_sink", lambda sink: f"{sink}.monitor")
+    monkeypatch.setattr("src.bot.meeting_session.remove_session_sink", lambda sink: None)
+
+    session = MeetingSession(
+        FakeRepo(),
+        FakeBrowserFactory(),
+        tmp_path,
+        "meet_capture.monitor",
+        "Bot",
+        fake_process_result,
+    )
+
+    await session.run(meeting("abc-defg-hij", end_utc=datetime(2026, 1, 1, tzinfo=UTC)))
+
+    assert PageClosedThenAloneMonitor.calls == 2

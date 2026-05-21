@@ -163,11 +163,7 @@ class MeetingSession:
         return self._can_auto_rejoin(attempt, meeting)
 
     def _can_auto_rejoin(self, attempt: int, meeting: MeetingEvent) -> bool:
-        if attempt >= MAX_AUTO_REJOINS:
-            return False
-        if not meeting.end_utc:
-            return True
-        return datetime.now(UTC) <= meeting.end_utc + timedelta(minutes=5)
+        return attempt < MAX_AUTO_REJOINS
 
     async def _pause_before_auto_rejoin(self, meet_code: str, reason: str) -> None:
         self.log.warning("meeting_session_auto_rejoin", meet_code=meet_code, reason=reason)
