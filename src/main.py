@@ -9,6 +9,7 @@ from src.auth.oauth_user import OAuthUserAuth
 from src.auth.token_store import TokenStore
 from src.bot.browser_session import BrowserSessionFactory
 from src.bot.meeting_session import MeetingSession
+from src.bot.session_keepalive import BotSessionKeepAlive
 from src.bot.storage_state_store import StorageStateStore
 from src.calendar_watcher.client import CalendarClient
 from src.calendar_watcher.watcher import CalendarWatcher
@@ -99,6 +100,7 @@ async def main() -> None:
     calendar_client = CalendarClient(credentials, settings.calendar_id)
     repo = MeetingsRepo(connect(settings.db_path))
     browser_factory = BrowserSessionFactory(storage_store, headless=settings.bot_headless)
+    keepalive = BotSessionKeepAlive(browser_factory, storage_store)
     meeting_session = MeetingSession(
         repo,
         browser_factory,
@@ -111,6 +113,17 @@ async def main() -> None:
     )
     runner = JobRunner(repo, meeting_session.run, settings.max_concurrent_meetings)
     runner.start()
+    if settings.bot_session_keepalive_enabled:
+        runner.scheduler.add_job(
+            keepalive.run,
+            "interval",
+            seconds=settings.bot_session_keepalive_interval_seconds,
+            next_run_time=datetime.now(UTC),
+            id="bot-session-keepalive",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
     notification_client = (discord_client or telegram_client) if settings.health_notify_enabled else None
     if gemini_client or notification_client:
         daily_check = DailyHealthCheck(notification_client, gemini_client)

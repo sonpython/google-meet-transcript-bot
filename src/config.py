@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     bot_headless: bool = Field(default=True)
     storage_state_path: Path = Field(default=Path("/data/tokens/storage-state.fernet"))
     storage_passphrase: str | None = Field(default=None)
+    bot_session_keepalive_enabled: bool = Field(default=True)
+    bot_session_keepalive_interval_seconds: int = Field(default=60, ge=30)
     test_meet_code: str | None = Field(default=None)
 
     gemini_api_key: str | None = Field(default=None)
