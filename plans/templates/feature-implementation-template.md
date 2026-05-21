@@ -1,9 +1,9 @@
 # [Feature Name] Implementation Plan
 
-**Date**: YYYY-MM-DD  
-**Type**: Feature Implementation  
-**Status**: Planning  
-**Context Tokens**: <200 words
+- **Date**: YYYY-MM-DD
+- **Type**: Feature Implementation
+- **Status**: Planning
+- **Context Tokens**: <200 words
 
 ## Executive Summary
 Brief 2-3 sentence description of the feature and its business value.

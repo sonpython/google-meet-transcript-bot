@@ -1,9 +1,9 @@
 # [Bug Fix] Implementation Plan
 
-**Date**: YYYY-MM-DD  
-**Type**: Bug Fix  
-**Priority**: [Critical/High/Medium/Low]  
-**Context Tokens**: <150 words
+- **Date**: YYYY-MM-DD
+- **Type**: Bug Fix
+- **Priority**: [Critical/High/Medium/Low]
+- **Context Tokens**: <150 words
 
 ## Executive Summary
 Brief description of the bug and its impact.

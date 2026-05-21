@@ -1,9 +1,9 @@
 # [Component/Module] Refactoring Plan
 
-**Date**: YYYY-MM-DD  
-**Type**: Refactoring  
-**Scope**: [Module/Component/System level]  
-**Context Tokens**: <200 words
+- **Date**: YYYY-MM-DD
+- **Type**: Refactoring
+- **Scope**: [Module/Component/System level]
+- **Context Tokens**: <200 words
 
 ## Executive Summary
 Brief description of what is being refactored and why.
