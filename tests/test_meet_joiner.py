@@ -39,6 +39,13 @@ class FakePage:
         return FakeLocator(self)
 
 
+class SignedOutPage:
+    url = "https://accounts.google.com/v3/signin/accountchooser"
+
+    async def goto(self, url: str, wait_until: str = "domcontentloaded"):
+        return None
+
+
 @pytest.mark.anyio
 async def test_wait_and_click_join_button_retries_until_button_renders() -> None:
     page = FakePage(visible_after=3)
@@ -54,3 +61,10 @@ async def test_wait_and_click_join_button_retries_until_button_renders() -> None
     assert page.button.clicked is True
     assert page.polls == 3
 
+
+@pytest.mark.anyio
+async def test_join_reports_signed_out_account() -> None:
+    result = await MeetJoiner().join(SignedOutPage(), "abc-defg-hij", "Bot")
+
+    assert result.status == "signed_out"
+    assert result.error_msg == "bot Google session signed out; re-auth required"

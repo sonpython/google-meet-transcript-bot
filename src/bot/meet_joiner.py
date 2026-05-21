@@ -9,6 +9,9 @@ class MeetJoiner:
     async def join(self, page, meet_code: str, display_name: str, timeout: int = 300) -> JoinResult:
         try:
             await page.goto(f"https://meet.google.com/{meet_code}", wait_until="domcontentloaded")
+            signed_out = await self._signed_out(page)
+            if signed_out:
+                return JoinResult("signed_out", error_msg="bot Google session signed out; re-auth required")
             await self._fill_name_if_needed(page, display_name)
             await self._ensure_media_off(page)
             clicked = await self._wait_and_click_join_button(
@@ -21,6 +24,16 @@ class MeetJoiner:
             return await self._wait_for_outcome(page, timeout)
         except Exception as exc:
             return JoinResult("network_error", error_msg=str(exc))
+
+    async def _signed_out(self, page) -> bool:
+        if "accounts.google.com" in getattr(page, "url", ""):
+            return True
+        try:
+            body = await page.locator("body").inner_text(timeout=1000)
+        except Exception:
+            return False
+        normalized = " ".join(body.lower().split())
+        return "đã đăng xuất" in normalized or "signed out" in normalized
 
     async def _fill_name_if_needed(self, page, display_name: str) -> None:
         locator = page.locator(sel.NAME_INPUT)

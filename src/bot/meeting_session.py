@@ -15,6 +15,7 @@ from src.runtime_audio import create_session_sink, remove_session_sink, safe_ses
 
 AUTO_REJOIN_EXIT_REASONS = {"page_closed"}
 AUTO_REJOIN_JOIN_STATUSES = {"network_error", "timeout"}
+NON_RETRYABLE_JOIN_STATUSES = {"signed_out"}
 MAX_AUTO_REJOINS = 2
 AUTO_REJOIN_DELAY_SECONDS = 10
 
@@ -70,6 +71,9 @@ class MeetingSession:
                 join_result = await MeetJoiner().join(session.page, meeting.meet_code, self.display_name)
                 if not join_result.admitted:
                     error = join_result.error_msg or join_result.status
+                    if join_result.status in NON_RETRYABLE_JOIN_STATUSES:
+                        self.repo.mark_status(meeting.meet_code, "failed", error)
+                        return
                     if self._should_auto_rejoin_join(join_result.status, attempt, meeting):
                         await self._pause_before_auto_rejoin(meeting.meet_code, error)
                         continue
