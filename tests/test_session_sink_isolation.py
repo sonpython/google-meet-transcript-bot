@@ -17,8 +17,8 @@ class FakeRepo:
     def mark_delivered(self, meet_code, notes_path, **extra_paths):
         self.statuses.append((meet_code, "delivered", notes_path, extra_paths))
 
-    def mark_processing(self, meet_code, status, batch=0, total=0, error=None):
-        self.statuses.append((meet_code, f"processing:{status}", batch, total, error))
+    def mark_processing(self, meet_code, status, batch=0, total=0, error=None, stage=None):
+        self.statuses.append((meet_code, f"processing:{status}", batch, total, error, stage))
 
     def get(self, meet_code):
         return {"admin_instruction": ""}

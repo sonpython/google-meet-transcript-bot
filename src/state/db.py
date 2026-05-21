@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS meetings (
     meeting_end_reason TEXT,
     admin_instruction TEXT,
     processing_status TEXT,
+    processing_stage TEXT,
     processing_batch INTEGER NOT NULL DEFAULT 0,
     processing_total INTEGER NOT NULL DEFAULT 0,
     processing_error TEXT,
@@ -72,6 +73,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
     _ensure_column(conn, "meetings", "meeting_end_reason", "TEXT")
     _ensure_column(conn, "meetings", "admin_instruction", "TEXT")
     _ensure_column(conn, "meetings", "processing_status", "TEXT")
+    _ensure_column(conn, "meetings", "processing_stage", "TEXT")
     _ensure_column(conn, "meetings", "processing_batch", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "meetings", "processing_total", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "meetings", "processing_error", "TEXT")

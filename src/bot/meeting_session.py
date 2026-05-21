@@ -246,9 +246,21 @@ class MeetingSession:
                     )
                     )
                 if hasattr(self.process_result, "process_many"):
-                    current_batch = total
-                    self.repo.mark_processing(meeting.meet_code, "running", total, total)
-                    output_paths = await self.process_result.process_many(tuple(results))
+                    async def on_progress(stage: str, batch: int, progress_total: int) -> None:
+                        nonlocal current_batch
+                        current_batch = batch
+                        self.repo.mark_processing(
+                            meeting.meet_code,
+                            "running",
+                            batch,
+                            progress_total,
+                            stage=stage,
+                        )
+
+                    output_paths = await self.process_result.process_many(
+                        tuple(results),
+                        on_progress=on_progress,
+                    )
                 else:
                     for index, result in enumerate(results, start=1):
                         current_batch = index

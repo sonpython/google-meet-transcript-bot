@@ -229,7 +229,7 @@ def _list_meetings() -> list[dict]:
                    organizer, attendees,
                    transcript_path, summary_path, minutes_path, notes_path, audio_path,
                    meeting_end_confirmed, meeting_end_reason, admin_instruction,
-                   processing_status, processing_batch, processing_total, processing_error,
+                   processing_status, processing_stage, processing_batch, processing_total, processing_error,
                    attempts, last_error, delivered_at, created_at, updated_at
             FROM meetings
             ORDER BY scheduled_start_utc DESC, updated_at DESC
@@ -348,6 +348,7 @@ def _api_meeting_payload(meeting: dict, include_content: bool = False) -> dict:
         "meeting_end_reason": detail.get("meeting_end_reason"),
         "admin_instruction": detail.get("admin_instruction"),
         "processing_status": detail.get("processing_status"),
+        "processing_stage": detail.get("processing_stage"),
         "processing_batch": detail.get("processing_batch"),
         "processing_total": detail.get("processing_total"),
         "processing_error": detail.get("processing_error"),
@@ -446,6 +447,7 @@ def _meeting_detail(meet_code: str, include_audio_peaks: bool = False) -> dict:
         "meeting_end_reason": meeting.get("meeting_end_reason"),
         "admin_instruction": meeting.get("admin_instruction"),
         "processing_status": meeting.get("processing_status"),
+        "processing_stage": meeting.get("processing_stage"),
         "processing_batch": meeting.get("processing_batch"),
         "processing_total": meeting.get("processing_total"),
         "processing_error": meeting.get("processing_error"),
@@ -891,8 +893,8 @@ async function api(path, opts={}){const r=await fetch('/admin/api/'+path,{cache:
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function fmt(v){if(!v)return ''; if(/^\d{4}-\d{2}-\d{2}$/.test(String(v)))return v; try{const d=new Date(v); return `${d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit',second:'2-digit'})} · ${d.toLocaleDateString()}`;}catch{return v;}}
 function badge(status){const labels={delivered:'Done',failed:'Fail',scheduled:'Sched',joining:'Join',recording:'Rec',recorded:'Saved',processing:'Proc',no_one_joined:'Empty',cancelled:'Cancel'}; return `<span class="status ${esc(status)}">${esc(labels[status]||status)}</span>`}
-function processingBadge(m){const state=String(m.processing_status||''); if(!state||state==='idle')return ''; const total=Number(m.processing_total||0); const batch=Number(m.processing_batch||0); if(state==='queued')return `<span class="status processing-queued">AI Queued<span class="dots"><span>.</span><span>.</span><span>.</span></span></span>`; if(state==='running')return `<span class="status processing-running">AI ${batch||0}/${total||'?'}<span class="dots"><span>.</span><span>.</span><span>.</span></span></span>`; if(state==='done')return `<span class="status processing-done">AI Done</span>`; if(state==='failed')return `<span class="status processing-failed">AI Fail</span>`; return `<span class="status">${esc(state)}</span>`;}
-function processingLine(m){const badgeHtml=processingBadge(m); if(!badgeHtml)return 'idle'; const err=m.processing_error?` <span class="muted">${esc(m.processing_error)}</span>`:''; return badgeHtml+err;}
+function processingBadge(m){const state=String(m.processing_status||''); if(!state||state==='idle')return ''; const total=Number(m.processing_total||0); const batch=Number(m.processing_batch||0); const stage=String(m.processing_stage||'AI'); if(state==='queued')return `<span class="status processing-queued">AI Queued<span class="dots"><span>.</span><span>.</span><span>.</span></span></span>`; if(state==='running')return `<span class="status processing-running">${esc(stage)} ${batch||0}/${total||'?'}<span class="dots"><span>.</span><span>.</span><span>.</span></span></span>`; if(state==='done')return `<span class="status processing-done">AI Done</span>`; if(state==='failed')return `<span class="status processing-failed">AI Fail</span>`; return `<span class="status">${esc(state)}</span>`;}
+function processingLine(m){const badgeHtml=processingBadge(m); if(!badgeHtml)return 'idle'; const stage=m.processing_stage?` <span class="muted">${esc(m.processing_stage)}</span>`:''; const err=m.processing_error?` <span class="muted">${esc(m.processing_error)}</span>`:''; return badgeHtml+stage+err;}
 function checkingBadge(){return `<span class="status checking">Checking<span class="dots"><span>.</span><span>.</span><span>.</span></span></span>`}
 let allMeetings=[];
 const urlState=new URLSearchParams(window.location.search);

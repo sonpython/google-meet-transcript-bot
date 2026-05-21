@@ -117,6 +117,33 @@ def test_pipeline_passes_admin_instruction_to_prompts(tmp_path: Path) -> None:
     assert all("Map Bob to Robert" in prompt for prompt in client.text_calls)
 
 
+def test_pipeline_reports_progress_by_stage(tmp_path: Path) -> None:
+    client = FakeGeminiClient()
+    pipeline = GeminiPipeline(client, tmp_path / "out")
+    pipeline.transcriber = Transcriber(client, chunker=FakeChunker(), work_dir=tmp_path / "chunks")
+    result = MeetingResult(
+        meet_code="abc-defg-hij",
+        audio_path=tmp_path / "meeting.opus",
+        duration_sec=120,
+        exit_reason="force_out",
+        participant_names=("An",),
+        title="Weekly Sync",
+    )
+    progress = []
+
+    async def on_progress(stage: str, batch: int, total: int) -> None:
+        progress.append((stage, batch, total))
+
+    asyncio.run(pipeline.process_many((result,), on_progress=on_progress))
+
+    assert progress == [
+        ("transcribing", 1, 1),
+        ("summarizing", 1, 1),
+        ("minutes", 1, 1),
+        ("writing", 1, 1),
+    ]
+
+
 def test_sanitize_minutes_removes_model_preamble() -> None:
     raw = (
         "Chắc chắn rồi, đây là biên bản cuộc họp (Meeting Minutes) từ transcript bạn đã cung cấp.\n\n"

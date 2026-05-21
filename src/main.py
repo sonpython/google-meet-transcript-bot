@@ -50,7 +50,14 @@ def _build_result_processor(settings):
     def pipeline() -> GeminiPipeline:
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY is required for meeting processing")
-        return GeminiPipeline(GeminiClient(settings.gemini_api_key, settings.gemini_model), settings.output_dir)
+        return GeminiPipeline(
+            GeminiClient(
+                settings.gemini_api_key,
+                settings.gemini_model,
+                request_timeout_seconds=settings.gemini_request_timeout_seconds,
+            ),
+            settings.output_dir,
+        )
 
     async def process(result: MeetingResult):
         transcript_path, summary_path, minutes_path, notes_path = await pipeline().process(result)
@@ -64,8 +71,12 @@ def _build_result_processor(settings):
             await telegram.deliver(result, notes_path, summary)
         return transcript_path, summary_path, minutes_path, notes_path
 
-    async def process_many(results: tuple[MeetingResult, ...], append: bool = True):
-        transcript_path, summary_path, minutes_path, notes_path = await pipeline().process_many(results, append=append)
+    async def process_many(results: tuple[MeetingResult, ...], append: bool = True, on_progress=None):
+        transcript_path, summary_path, minutes_path, notes_path = await pipeline().process_many(
+            results,
+            append=append,
+            on_progress=on_progress,
+        )
         result = results[-1]
         if settings.delivery_enabled and settings.discord_bot_token and settings.discord_channel_id:
             discord = DiscordDelivery(DiscordClient(settings.discord_bot_token, settings.discord_channel_id))
@@ -218,15 +229,11 @@ async def _run_regenerate_command(settings, command, result_processor) -> None:
             repo.complete_command(command["id"], "failed", "no audio files found")
             repo.mark_processing(meet_code, "failed", 0, 0, "no audio files found")
             return
-        repo.mark_processing(meet_code, "running", 0, len(audio_paths))
-        output_paths = _output_paths(settings.output_dir, row["title"] or meet_code)
-        for path in output_paths:
-            path.unlink(missing_ok=True)
+        repo.mark_processing(meet_code, "running", 0, len(audio_paths), stage="preparing")
         participants = _participants(row)
         instruction = str(row["admin_instruction"] or "")
         results = []
         for index, audio_path in enumerate(audio_paths, start=1):
-            repo.mark_processing(meet_code, "running", index, len(audio_paths))
             results.append(
                 MeetingResult(
                     meet_code=meet_code,
@@ -239,11 +246,15 @@ async def _run_regenerate_command(settings, command, result_processor) -> None:
                     admin_instruction=instruction,
                 )
             )
+        async def on_progress(stage: str, batch: int, total: int) -> None:
+            repo.mark_processing(meet_code, "running", batch, total, stage=stage)
+
         transcript_path, summary_path, minutes_path, notes_path = await result_processor.process_many(
             tuple(results),
             append=False,
+            on_progress=on_progress,
         )
-        repo.mark_processing(meet_code, "done", len(audio_paths), len(audio_paths))
+        repo.mark_processing(meet_code, "done", len(audio_paths), len(audio_paths), stage="done")
         repo.mark_delivered(
             meet_code,
             str(notes_path),

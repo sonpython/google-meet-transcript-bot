@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import UTC, datetime
+from typing import Awaitable, Callable
 
 from src.gemini.summarizer import Summarizer
 from src.gemini.transcriber import Transcriber
@@ -16,13 +17,20 @@ class GeminiPipeline:
     async def process(self, result: MeetingResult) -> tuple[Path, Path, Path, Path]:
         return await self.process_many((result,))
 
-    async def process_many(self, results: tuple[MeetingResult, ...] | list[MeetingResult], append: bool = True) -> tuple[Path, Path, Path, Path]:
+    async def process_many(
+        self,
+        results: tuple[MeetingResult, ...] | list[MeetingResult],
+        append: bool = True,
+        on_progress: Callable[[str, int, int], Awaitable[None] | None] | None = None,
+    ) -> tuple[Path, Path, Path, Path]:
         if not results:
             raise ValueError("results must not be empty")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         first = results[0]
         transcript_parts = []
-        for result in results:
+        total = len(results)
+        for index, result in enumerate(results, start=1):
+            await _notify(on_progress, "transcribing", index, total)
             transcript = await self.transcriber.transcribe(
                 result.audio_path,
                 result.participant_names,
@@ -31,7 +39,9 @@ class GeminiPipeline:
             )
             transcript_parts.append(f"{_segment_marker(result)}\n{transcript}")
         combined_transcript = "\n\n---\n\n".join(transcript_parts).strip()
+        await _notify(on_progress, "summarizing", total, total)
         summary = await self.summarizer.summarize(combined_transcript, first.title, first.admin_instruction)
+        await _notify(on_progress, "minutes", total, total)
         minutes = await self.summarizer.minutes(combined_transcript, first.title, first.admin_instruction)
         slug = _slug(first.title or first.meet_code)
         transcript_path = self.output_dir / f"transcript-{slug}.md"
@@ -49,7 +59,21 @@ class GeminiPipeline:
             header=f"# {first.title or first.meet_code}",
             append=append,
         )
+        await _notify(on_progress, "writing", total, total)
         return transcript_path, summary_path, minutes_path, notes_path
+
+
+async def _notify(
+    on_progress: Callable[[str, int, int], Awaitable[None] | None] | None,
+    stage: str,
+    batch: int,
+    total: int,
+) -> None:
+    if not on_progress:
+        return
+    result = on_progress(stage, batch, total)
+    if result is not None:
+        await result
 
 
 def _slug(value: str) -> str:

@@ -95,15 +95,16 @@ class MeetingsRepo:
         batch: int = 0,
         total: int = 0,
         error: str | None = None,
+        stage: str | None = None,
     ) -> None:
         self.conn.execute(
             """
             UPDATE meetings
             SET processing_status=?, processing_batch=?, processing_total=?,
-                processing_error=?, updated_at=CURRENT_TIMESTAMP
+                processing_error=?, processing_stage=?, updated_at=CURRENT_TIMESTAMP
             WHERE meet_code=?
             """,
-            (status, batch, total, error, meet_code),
+            (status, batch, total, error, stage, meet_code),
         )
         self.conn.commit()
 
