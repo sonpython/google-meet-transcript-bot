@@ -70,7 +70,7 @@ def test_transcriber_marks_failed_chunk_after_repeated_loop(tmp_path: Path, monk
     assert "[CHUNK_TRANSCRIBE_FAILED] Chunk 2 failed after 4 attempts" in transcript
 
 
-def test_pipeline_writes_outputs(tmp_path: Path) -> None:
+def test_pipeline_writes_transcript_by_default(tmp_path: Path) -> None:
     client = FakeGeminiClient()
     pipeline = GeminiPipeline(client, tmp_path / "out")
     pipeline.transcriber = Transcriber(client, chunker=FakeChunker(), work_dir=tmp_path / "chunks")
@@ -83,10 +83,35 @@ def test_pipeline_writes_outputs(tmp_path: Path) -> None:
         title="Weekly Sync",
     )
 
-    transcript_path, summary_path, minutes_path, notes_path = asyncio.run(pipeline.process(result))
+    output_paths = asyncio.run(pipeline.process(result))
+    transcript_path = output_paths[0]
+
+    assert len(output_paths) == 1
+    assert transcript_path.exists()
+    assert "## Session " in transcript_path.read_text()
+    assert len(client.text_calls) == 0
+
+
+def test_pipeline_generates_documents_when_requested(tmp_path: Path) -> None:
+    client = FakeGeminiClient()
+    pipeline = GeminiPipeline(client, tmp_path / "out")
+    pipeline.transcriber = Transcriber(client, chunker=FakeChunker(), work_dir=tmp_path / "chunks")
+    result = MeetingResult(
+        meet_code="abc-defg-hij",
+        audio_path=tmp_path / "meeting.opus",
+        duration_sec=120,
+        exit_reason="empty_meeting",
+        participant_names=("An",),
+        title="Weekly Sync",
+        admin_instruction="Write professional minutes.",
+    )
+
+    transcript_path, summary_path, minutes_path, notes_path = asyncio.run(
+        pipeline.process(result, generate_documents=True)
+    )
 
     assert transcript_path.exists()
-    assert "## Session " in summary_path.read_text()
+    assert "## Generated " in summary_path.read_text()
     assert "## TL;DR\nSummary content" in summary_path.read_text()
     assert "## Thông Tin Cuộc Họp\nMinutes content" in minutes_path.read_text()
     assert len(client.text_calls) == 2
@@ -111,7 +136,7 @@ def test_pipeline_passes_admin_instruction_to_prompts(tmp_path: Path) -> None:
         admin_instruction="Map Bob to Robert and focus on action items.",
     )
 
-    asyncio.run(pipeline.process(result))
+    asyncio.run(pipeline.process(result, generate_documents=True))
 
     assert "Map Bob to Robert" in client.audio_calls[0][1]
     assert all("Map Bob to Robert" in prompt for prompt in client.text_calls)
@@ -128,19 +153,21 @@ def test_pipeline_reports_progress_by_stage(tmp_path: Path) -> None:
         exit_reason="force_out",
         participant_names=("An",),
         title="Weekly Sync",
+        admin_instruction="Generate clean minutes.",
     )
     progress = []
 
     async def on_progress(stage: str, batch: int, total: int) -> None:
         progress.append((stage, batch, total))
 
-    asyncio.run(pipeline.process_many((result,), on_progress=on_progress))
+    asyncio.run(pipeline.process_many((result,), on_progress=on_progress, generate_documents=True))
 
     assert progress == [
         ("transcribing", 1, 1),
-        ("summarizing", 1, 1),
-        ("minutes", 1, 1),
-        ("writing", 1, 1),
+        ("writing_transcript", 1, 1),
+        ("summarizing", 1, 3),
+        ("minutes", 2, 3),
+        ("writing", 3, 3),
     ]
 
 

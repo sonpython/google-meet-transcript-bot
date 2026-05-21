@@ -59,8 +59,11 @@ def _build_result_processor(settings):
             settings.output_dir,
         )
 
-    async def process(result: MeetingResult):
-        transcript_path, summary_path, minutes_path, notes_path = await pipeline().process(result)
+    async def process(result: MeetingResult, generate_documents: bool = False):
+        output_paths = await pipeline().process(result, generate_documents=generate_documents)
+        if not generate_documents:
+            return output_paths
+        transcript_path, summary_path, minutes_path, notes_path = output_paths
         if settings.delivery_enabled and settings.discord_bot_token and settings.discord_channel_id:
             discord = DiscordDelivery(DiscordClient(settings.discord_bot_token, settings.discord_channel_id))
             summary = summary_path.read_text()
@@ -71,12 +74,21 @@ def _build_result_processor(settings):
             await telegram.deliver(result, notes_path, summary)
         return transcript_path, summary_path, minutes_path, notes_path
 
-    async def process_many(results: tuple[MeetingResult, ...], append: bool = True, on_progress=None):
-        transcript_path, summary_path, minutes_path, notes_path = await pipeline().process_many(
+    async def process_many(
+        results: tuple[MeetingResult, ...],
+        append: bool = True,
+        on_progress=None,
+        generate_documents: bool = False,
+    ):
+        output_paths = await pipeline().process_many(
             results,
             append=append,
             on_progress=on_progress,
+            generate_documents=generate_documents,
         )
+        if not generate_documents:
+            return output_paths
+        transcript_path, summary_path, minutes_path, notes_path = output_paths
         result = results[-1]
         if settings.delivery_enabled and settings.discord_bot_token and settings.discord_channel_id:
             discord = DiscordDelivery(DiscordClient(settings.discord_bot_token, settings.discord_channel_id))
@@ -86,9 +98,20 @@ def _build_result_processor(settings):
             telegram = TelegramDelivery(TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id))
             summary = summary_path.read_text()
             await telegram.deliver(result, notes_path, summary)
-        return transcript_path, summary_path, minutes_path, notes_path
+        return output_paths
+
+    async def generate_documents(transcript: str, title: str, meet_code: str, admin_instruction: str, on_progress=None):
+        return await pipeline().generate_documents(
+            transcript,
+            title,
+            meet_code,
+            admin_instruction,
+            append=False,
+            on_progress=on_progress,
+        )
 
     process.process_many = process_many
+    process.generate_documents = generate_documents
     return process
 
 
@@ -100,7 +123,15 @@ async def main() -> None:
 
     token_store = TokenStore(settings.token_store_path, settings.token_passphrase)
     storage_store = StorageStateStore(settings.storage_state_path, settings.storage_passphrase)
-    gemini_client = GeminiClient(settings.gemini_api_key, settings.gemini_model) if settings.gemini_api_key else None
+    gemini_client = (
+        GeminiClient(
+            settings.gemini_api_key,
+            settings.gemini_model,
+            request_timeout_seconds=settings.gemini_request_timeout_seconds,
+        )
+        if settings.gemini_api_key
+        else None
+    )
     telegram_client = (
         TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
         if not settings.discord_bot_token and settings.telegram_bot_token and settings.telegram_chat_id
@@ -224,37 +255,53 @@ async def _run_regenerate_command(settings, command, result_processor) -> None:
         if not row:
             repo.complete_command(command["id"], "failed", "meeting not found")
             return
-        audio_paths = _audio_paths(settings.audio_dir, meet_code)
-        if not audio_paths:
-            repo.complete_command(command["id"], "failed", "no audio files found")
-            repo.mark_processing(meet_code, "failed", 0, 0, "no audio files found")
+        if not str(row["admin_instruction"] or "").strip():
+            repo.complete_command(command["id"], "failed", "admin instruction is required")
+            repo.mark_processing(meet_code, "failed", 0, 0, "admin instruction is required", stage="failed")
             return
-        repo.mark_processing(meet_code, "running", 0, len(audio_paths), stage="preparing")
+        repo.mark_processing(meet_code, "running", 0, 3, stage="preparing")
         participants = _participants(row)
         instruction = str(row["admin_instruction"] or "")
-        results = []
-        for index, audio_path in enumerate(audio_paths, start=1):
-            results.append(
-                MeetingResult(
-                    meet_code=meet_code,
-                    audio_path=audio_path,
-                    duration_sec=_duration_seconds(audio_path),
-                    exit_reason="regenerate",
-                    participant_names=participants,
-                    title=row["title"] or meet_code,
-                    actual_end_utc=_parse_dt(row["actual_end_utc"]),
-                    admin_instruction=instruction,
-                )
-            )
         async def on_progress(stage: str, batch: int, total: int) -> None:
             repo.mark_processing(meet_code, "running", batch, total, stage=stage)
 
-        transcript_path, summary_path, minutes_path, notes_path = await result_processor.process_many(
-            tuple(results),
-            append=False,
+        transcript_path, transcript = _existing_transcript(settings.output_dir, row)
+        if not transcript:
+            audio_paths = _audio_paths(settings.audio_dir, meet_code)
+            if not audio_paths:
+                repo.complete_command(command["id"], "failed", "no transcript or audio files found")
+                repo.mark_processing(meet_code, "failed", 0, 0, "no transcript or audio files found", stage="failed")
+                return
+            results = []
+            for audio_path in audio_paths:
+                results.append(
+                    MeetingResult(
+                        meet_code=meet_code,
+                        audio_path=audio_path,
+                        duration_sec=_duration_seconds(audio_path),
+                        exit_reason="regenerate",
+                        participant_names=participants,
+                        title=row["title"] or meet_code,
+                        actual_end_utc=_parse_dt(row["actual_end_utc"]),
+                        admin_instruction=instruction,
+                    )
+                )
+            transcript_only = await result_processor.process_many(
+                tuple(results),
+                append=False,
+                on_progress=on_progress,
+                generate_documents=False,
+            )
+            transcript_path = transcript_only[0]
+            transcript = transcript_path.read_text(encoding="utf-8")
+        summary_path, minutes_path, notes_path = await result_processor.generate_documents(
+            transcript,
+            row["title"] or meet_code,
+            meet_code,
+            instruction,
             on_progress=on_progress,
         )
-        repo.mark_processing(meet_code, "done", len(audio_paths), len(audio_paths), stage="done")
+        repo.mark_processing(meet_code, "done", 3, 3, stage="done")
         repo.mark_delivered(
             meet_code,
             str(notes_path),
@@ -264,7 +311,7 @@ async def _run_regenerate_command(settings, command, result_processor) -> None:
         )
         repo.complete_command(command["id"])
     except Exception as exc:
-        repo.mark_processing(meet_code, "failed", 0, 0, str(exc))
+        repo.mark_processing(meet_code, "failed", 0, 0, str(exc), stage="failed")
         repo.complete_command(command["id"], "failed", str(exc))
     finally:
         repo.conn.close()
@@ -301,6 +348,17 @@ def _output_paths(output_dir: Path, title: str) -> tuple[Path, Path, Path, Path]
         output_dir / f"meeting-minutes-{slug}.md",
         output_dir / f"meeting-notes-{slug}.md",
     )
+
+
+def _existing_transcript(output_dir: Path, row) -> tuple[Path | None, str]:
+    if row["transcript_path"]:
+        path = Path(row["transcript_path"])
+        if path.exists():
+            return path, path.read_text(encoding="utf-8")
+    transcript_path = _output_paths(output_dir, row["title"] or row["meet_code"])[0]
+    if transcript_path.exists():
+        return transcript_path, transcript_path.read_text(encoding="utf-8")
+    return None, ""
 
 
 def _duration_seconds(path: Path) -> int:

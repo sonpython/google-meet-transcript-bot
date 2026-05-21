@@ -269,7 +269,7 @@ class MeetingSession:
                 if not output_paths:
                     raise RuntimeError("no output generated")
                 notes_path, extra_paths = _normalize_output_paths(output_paths)
-                self.repo.mark_processing(meeting.meet_code, "done", total, total)
+                self.repo.mark_processing(meeting.meet_code, "done", total, total, stage="done")
                 self.repo.mark_delivered(meeting.meet_code, str(notes_path), **extra_paths)
                 self._cleanup_audio()
             except Exception as exc:
@@ -317,6 +317,9 @@ class MeetingSession:
 
 def _normalize_output_paths(output_paths) -> tuple[Path, dict[str, str]]:
     if isinstance(output_paths, tuple):
+        if len(output_paths) == 1:
+            transcript_path = output_paths[0]
+            return transcript_path, {"transcript_path": str(transcript_path)}
         if len(output_paths) == 4:
             transcript_path, summary_path, minutes_path, notes_path = output_paths
             return notes_path, {

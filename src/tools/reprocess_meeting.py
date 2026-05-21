@@ -15,9 +15,10 @@ from src.state.meetings_repo import MeetingsRepo
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Regenerate transcript, summary, minutes, and notes for a meeting.")
+    parser = argparse.ArgumentParser(description="Regenerate transcript for a meeting, optionally generating AI documents.")
     parser.add_argument("--meet-code", required=True)
     parser.add_argument("--clear-meta", action="store_true", help="Remove cached .opus.meta.json files for this meeting.")
+    parser.add_argument("--generate-documents", action="store_true", help="Also generate summary, minutes, and notes.")
     return parser.parse_args()
 
 
@@ -68,14 +69,23 @@ async def main() -> None:
 
     if not results:
         raise RuntimeError(f"No output generated for {meet_code}")
-    transcript_path, summary_path, minutes_path, notes_path = await pipeline.process_many(tuple(results), append=False)
-    repo.mark_delivered(
-        meet_code,
-        str(notes_path),
-        transcript_path=str(transcript_path),
-        summary_path=str(summary_path),
-        minutes_path=str(minutes_path),
+    output_paths = await pipeline.process_many(
+        tuple(results),
+        append=False,
+        generate_documents=args.generate_documents,
     )
+    if len(output_paths) == 4:
+        transcript_path, summary_path, minutes_path, notes_path = output_paths
+        repo.mark_delivered(
+            meet_code,
+            str(notes_path),
+            transcript_path=str(transcript_path),
+            summary_path=str(summary_path),
+            minutes_path=str(minutes_path),
+        )
+    else:
+        transcript_path = output_paths[0]
+        repo.mark_delivered(meet_code, str(transcript_path), transcript_path=str(transcript_path))
     print(json.dumps({"meet_code": meet_code, "segments": [str(path) for path in audio_paths]}, ensure_ascii=False))
 
 
