@@ -40,6 +40,8 @@ class MeetingSession:
         self.auto_purge_audio = auto_purge_audio
         self.audio_retention_days = audio_retention_days
         self.log = structlog.get_logger(__name__)
+        self._processing_tasks: set[asyncio.Task] = set()
+        self._processing_locks: dict[str, asyncio.Lock] = {}
 
     async def run(self, meeting: MeetingEvent) -> None:
         recorded_paths: list[Path] = []
@@ -127,29 +129,18 @@ class MeetingSession:
             return
         self.repo.mark_status(
             meeting.meet_code,
-            "processing",
+            "recorded",
             audio_path=str(recorded_paths[-1]),
             actual_end_utc=actual_end.isoformat(),
         )
-        output_paths = None
-        participant_names = tuple(dict.fromkeys(all_participants))
-        for path in recorded_paths:
-            result = MeetingResult(
-                meeting.meet_code,
-                path,
-                total_duration,
-                final_reason,
-                participant_names,
-                meeting.title,
-                actual_end,
-            )
-            output_paths = await self.process_result(result)
-        if not output_paths:
-            self.repo.mark_status(meeting.meet_code, "failed", "no output generated", audio_path=str(recorded_paths[-1]))
-            return
-        notes_path, extra_paths = _normalize_output_paths(output_paths)
-        self.repo.mark_delivered(meeting.meet_code, str(notes_path), **extra_paths)
-        self._cleanup_audio()
+        self._start_processing_task(
+            meeting,
+            recorded_paths,
+            total_duration,
+            final_reason,
+            tuple(dict.fromkeys(all_participants)),
+            actual_end,
+        )
 
     def _claim_force_out(self, meet_code: str) -> bool:
         command = self.repo.claim_pending_force_out(meet_code)
@@ -178,6 +169,78 @@ class MeetingSession:
         self.log.warning("meeting_session_auto_rejoin", meet_code=meet_code, reason=reason)
         self.repo.mark_status(meet_code, "joining", f"auto rejoin: {reason}")
         await asyncio.sleep(AUTO_REJOIN_DELAY_SECONDS)
+
+    def _start_processing_task(
+        self,
+        meeting: MeetingEvent,
+        recorded_paths: list[Path],
+        total_duration: int,
+        final_reason: str,
+        participant_names: tuple[str, ...],
+        actual_end: datetime,
+    ) -> None:
+        task = asyncio.create_task(
+            self._process_recordings(
+                meeting,
+                recorded_paths,
+                total_duration,
+                final_reason,
+                participant_names,
+                actual_end,
+            )
+        )
+        self._processing_tasks.add(task)
+        task.add_done_callback(self._processing_tasks.discard)
+
+    async def _process_recordings(
+        self,
+        meeting: MeetingEvent,
+        recorded_paths: list[Path],
+        total_duration: int,
+        final_reason: str,
+        participant_names: tuple[str, ...],
+        actual_end: datetime,
+    ) -> None:
+        lock = self._processing_locks.setdefault(meeting.meet_code, asyncio.Lock())
+        async with lock:
+            total = len(recorded_paths)
+            output_paths = None
+            current_batch = 0
+            try:
+                self.repo.mark_processing(meeting.meet_code, "running", 0, total)
+                for index, path in enumerate(recorded_paths, start=1):
+                    current_batch = index
+                    self.repo.mark_processing(meeting.meet_code, "running", index, total)
+                    result = MeetingResult(
+                        meeting.meet_code,
+                        path,
+                        total_duration,
+                        final_reason,
+                        participant_names,
+                        meeting.title,
+                        actual_end,
+                    )
+                    output_paths = await self.process_result(result)
+                if not output_paths:
+                    raise RuntimeError("no output generated")
+                notes_path, extra_paths = _normalize_output_paths(output_paths)
+                self.repo.mark_processing(meeting.meet_code, "done", total, total)
+                self.repo.mark_delivered(meeting.meet_code, str(notes_path), **extra_paths)
+                self._cleanup_audio()
+            except Exception as exc:
+                self.log.exception("meeting_session_processing_failed", meet_code=meeting.meet_code)
+                self.repo.mark_processing(
+                    meeting.meet_code,
+                    "failed",
+                    current_batch,
+                    total,
+                    str(exc),
+                )
+                self.repo.mark_status(meeting.meet_code, "recorded", f"processing failed: {exc}")
+
+    async def wait_for_processing(self) -> None:
+        if self._processing_tasks:
+            await asyncio.gather(*tuple(self._processing_tasks))
 
     def _retention_days(self) -> int:
         if callable(self.audio_retention_days):

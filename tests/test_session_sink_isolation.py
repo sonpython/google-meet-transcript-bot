@@ -17,6 +17,9 @@ class FakeRepo:
     def mark_delivered(self, meet_code, notes_path, **extra_paths):
         self.statuses.append((meet_code, "delivered", notes_path, extra_paths))
 
+    def mark_processing(self, meet_code, status, batch=0, total=0, error=None):
+        self.statuses.append((meet_code, f"processing:{status}", batch, total, error))
+
     def claim_pending_force_out(self, meet_code):
         return None
 
@@ -129,6 +132,7 @@ async def test_session_uses_distinct_sink_and_monitor_per_meeting(tmp_path, monk
 
     await session.run(meeting("abc-defg-hij"))
     await session.run(meeting("xyz-uvwx-rst"))
+    await session.wait_for_processing()
 
     assert created == ["meet_capture_abc_defg_hij", "meet_capture_xyz_uvwx_rst"]
     assert factory.pulse_sinks == created
@@ -220,6 +224,7 @@ async def test_session_auto_rejoins_after_page_closed(tmp_path, monkeypatch) -> 
     )
 
     await session.run(meeting("abc-defg-hij"))
+    await session.wait_for_processing()
 
     assert PageClosedThenAloneMonitor.calls == 2
     assert removed == ["meet_capture_abc_defg_hij", "meet_capture_abc_defg_hij"]

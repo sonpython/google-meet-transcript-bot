@@ -88,6 +88,25 @@ class MeetingsRepo:
             **fields,
         )
 
+    def mark_processing(
+        self,
+        meet_code: str,
+        status: str,
+        batch: int = 0,
+        total: int = 0,
+        error: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE meetings
+            SET processing_status=?, processing_batch=?, processing_total=?,
+                processing_error=?, updated_at=CURRENT_TIMESTAMP
+            WHERE meet_code=?
+            """,
+            (status, batch, total, error, meet_code),
+        )
+        self.conn.commit()
+
     def request_rejoin(self, meet_code: str) -> int:
         cur = self.conn.execute(
             """

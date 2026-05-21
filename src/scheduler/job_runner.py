@@ -9,6 +9,7 @@ from src.models.meeting_event import MeetingEvent
 from src.state.meetings_repo import MeetingsRepo
 
 LATE_START_GRACE = timedelta(minutes=30)
+NON_SCHEDULABLE_STATUSES = {"joining", "recording", "recorded", "processing", "delivered", "failed", "cancelled", "no_one_joined"}
 
 
 class JobRunner:
@@ -28,7 +29,7 @@ class JobRunner:
 
     def schedule_bot_join(self, meeting: MeetingEvent) -> None:
         existing = self.repo.get(meeting.meet_code)
-        if existing and existing["status"] in {"delivered", "failed", "cancelled", "no_one_joined"}:
+        if existing and existing["status"] in NON_SCHEDULABLE_STATUSES:
             return
         self.repo.upsert(meeting)
         if meeting.meet_code in self._running_meet_codes:
