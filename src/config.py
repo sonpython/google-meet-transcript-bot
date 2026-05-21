@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     debug_dir: Path = Field(default=Path("/data/debug"))
 
     bot_email: str = Field(default="bot@your-domain.com")
+    bot_password: str | None = Field(default=None)
     bot_display_name: str = Field(default="Meeting Note-taker (bot)")
     bot_headless: bool = Field(default=True)
     storage_state_path: Path = Field(default=Path("/data/tokens/storage-state.fernet"))

@@ -48,7 +48,7 @@ async def test_keepalive_saves_refreshed_state_when_session_is_valid() -> None:
     factory = FakeBrowserFactory("https://myaccount.google.com/")
     store = FakeStorageStore()
 
-    ok = await BotSessionKeepAlive(factory, store).run()
+    ok = await BotSessionKeepAlive(factory, store, "bot@example.com").run()
 
     assert ok is True
     assert factory.session.page.visited_url == "https://myaccount.google.com/"
@@ -57,11 +57,11 @@ async def test_keepalive_saves_refreshed_state_when_session_is_valid() -> None:
 
 
 @pytest.mark.anyio
-async def test_keepalive_does_not_save_when_session_is_signed_out() -> None:
+async def test_keepalive_does_not_save_when_session_is_signed_out_without_password() -> None:
     factory = FakeBrowserFactory("https://accounts.google.com/v3/signin/accountchooser")
     store = FakeStorageStore()
 
-    ok = await BotSessionKeepAlive(factory, store).run()
+    ok = await BotSessionKeepAlive(factory, store, "bot@example.com").run()
 
     assert ok is False
     assert store.saved is None

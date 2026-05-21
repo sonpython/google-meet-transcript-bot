@@ -100,7 +100,7 @@ async def main() -> None:
     calendar_client = CalendarClient(credentials, settings.calendar_id)
     repo = MeetingsRepo(connect(settings.db_path))
     browser_factory = BrowserSessionFactory(storage_store, headless=settings.bot_headless)
-    keepalive = BotSessionKeepAlive(browser_factory, storage_store)
+    keepalive = BotSessionKeepAlive(browser_factory, storage_store, settings.bot_email, settings.bot_password)
     meeting_session = MeetingSession(
         repo,
         browser_factory,
