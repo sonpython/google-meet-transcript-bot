@@ -11,8 +11,8 @@ class FakeRepo:
     def __init__(self) -> None:
         self.statuses = []
 
-    def mark_status(self, meet_code, status, last_error=None, audio_path=None):
-        self.statuses.append((meet_code, status, last_error, audio_path))
+    def mark_status(self, meet_code, status, last_error=None, audio_path=None, **fields):
+        self.statuses.append((meet_code, status, last_error, audio_path, fields))
 
     def mark_delivered(self, meet_code, notes_path, **extra_paths):
         self.statuses.append((meet_code, "delivered", notes_path, extra_paths))
@@ -167,3 +167,60 @@ async def test_session_removes_sink_when_join_fails(tmp_path, monkeypatch) -> No
     await session.run(meeting("abc-defg-hij"))
 
     assert removed == ["meet_capture_abc_defg_hij"]
+
+
+@pytest.mark.anyio
+async def test_session_auto_rejoins_after_page_closed(tmp_path, monkeypatch) -> None:
+    removed = []
+    processed = []
+
+    class UniqueRecorder(FakeRecorder):
+        starts = []
+        counter = 0
+
+        def start(self, meet_code, audio_source=None):
+            self.running = True
+            UniqueRecorder.counter += 1
+            self.output_path = self.audio_dir / f"{meet_code}-{UniqueRecorder.counter}.opus"
+            self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            self.output_path.write_bytes(b"opus")
+            self.starts.append((meet_code, audio_source))
+            return self.output_path
+
+    class PageClosedThenAloneMonitor:
+        calls = 0
+
+        def __init__(self, page, should_force_exit):
+            pass
+
+        async def run_until_exit(self):
+            PageClosedThenAloneMonitor.calls += 1
+            if PageClosedThenAloneMonitor.calls == 1:
+                return "page_closed", ["Host", "Bot"], 10, datetime(2026, 5, 20, tzinfo=UTC)
+            return "alone", ["Host", "Bot"], 20, datetime(2026, 5, 20, 0, 1, tzinfo=UTC)
+
+    async def process_result(result):
+        processed.append(result.audio_path.name)
+        return await fake_process_result(result)
+
+    monkeypatch.setattr("src.bot.meeting_session.AUTO_REJOIN_DELAY_SECONDS", 0)
+    monkeypatch.setattr("src.bot.meeting_session.AudioRecorder", UniqueRecorder)
+    monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", FakeMeetJoiner)
+    monkeypatch.setattr("src.bot.meeting_session.MeetMonitor", PageClosedThenAloneMonitor)
+    monkeypatch.setattr("src.bot.meeting_session.create_session_sink", lambda sink: f"{sink}.monitor")
+    monkeypatch.setattr("src.bot.meeting_session.remove_session_sink", lambda sink: removed.append(sink))
+
+    session = MeetingSession(
+        FakeRepo(),
+        FakeBrowserFactory(),
+        tmp_path,
+        "meet_capture.monitor",
+        "Bot",
+        process_result,
+    )
+
+    await session.run(meeting("abc-defg-hij"))
+
+    assert PageClosedThenAloneMonitor.calls == 2
+    assert removed == ["meet_capture_abc_defg_hij", "meet_capture_abc_defg_hij"]
+    assert processed == ["abc-defg-hij-1.opus", "abc-defg-hij-2.opus"]

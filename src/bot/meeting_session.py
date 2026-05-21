@@ -1,3 +1,4 @@
+import asyncio
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,11 @@ from src.bot.meet_monitor import MeetMonitor
 from src.models.meeting_event import MeetingEvent
 from src.models.meeting_result import MeetingResult
 from src.runtime_audio import create_session_sink, remove_session_sink, safe_session_sink_name
+
+AUTO_REJOIN_EXIT_REASONS = {"page_closed"}
+AUTO_REJOIN_JOIN_STATUSES = {"network_error", "timeout"}
+MAX_AUTO_REJOINS = 2
+AUTO_REJOIN_DELAY_SECONDS = 10
 
 
 class MeetingSession:
@@ -36,75 +42,114 @@ class MeetingSession:
         self.log = structlog.get_logger(__name__)
 
     async def run(self, meeting: MeetingEvent) -> None:
-        session = None
-        recorder = AudioRecorder(self.audio_dir, self.audio_source)
-        audio_path = None
-        sink_name = None
-        monitor_source = self.audio_source
-        try:
-            self.repo.mark_status(meeting.meet_code, "joining")
-            sink_name = safe_session_sink_name(meeting.meet_code)
-            monitor_source = create_session_sink(sink_name)
-            self.log.info(
-                "meeting_session_audio_sink_created",
-                meet_code=meeting.meet_code,
-                sink=sink_name,
-                monitor=monitor_source,
-            )
-            session = await self.browser_factory.launch_with_state(pulse_sink=sink_name)
-            join_result = await MeetJoiner().join(session.page, meeting.meet_code, self.display_name)
-            if not join_result.admitted:
-                self.repo.mark_status(meeting.meet_code, "failed", join_result.error_msg or join_result.status)
-                return
-            audio_path = recorder.start(meeting.meet_code, audio_source=monitor_source)
-            self.repo.mark_status(meeting.meet_code, "recording", audio_path=str(audio_path))
-            reason, participants, duration, actual_end = await MeetMonitor(
-                session.page,
-                should_force_exit=lambda: self._claim_force_out(meeting.meet_code),
-            ).run_until_exit()
-            final_path = recorder.stop()
-            await session.close()
+        recorded_paths: list[Path] = []
+        total_duration = 0
+        all_participants: list[str] = []
+        final_reason = "unknown"
+        actual_end = meeting.start_utc
+        for attempt in range(MAX_AUTO_REJOINS + 1):
             session = None
-            if reason == "no_one_joined":
+            recorder = AudioRecorder(self.audio_dir, self.audio_source)
+            audio_path = None
+            sink_name = None
+            monitor_source = self.audio_source
+            try:
+                self.repo.mark_status(meeting.meet_code, "joining")
+                sink_name = safe_session_sink_name(meeting.meet_code)
+                monitor_source = create_session_sink(sink_name)
+                self.log.info(
+                    "meeting_session_audio_sink_created",
+                    meet_code=meeting.meet_code,
+                    sink=sink_name,
+                    monitor=monitor_source,
+                    attempt=attempt + 1,
+                )
+                session = await self.browser_factory.launch_with_state(pulse_sink=sink_name)
+                join_result = await MeetJoiner().join(session.page, meeting.meet_code, self.display_name)
+                if not join_result.admitted:
+                    error = join_result.error_msg or join_result.status
+                    if self._should_auto_rejoin_join(join_result.status, attempt, meeting):
+                        await self._pause_before_auto_rejoin(meeting.meet_code, error)
+                        continue
+                    self.repo.mark_status(meeting.meet_code, "failed", error)
+                    return
+                audio_path = recorder.start(meeting.meet_code, audio_source=monitor_source)
+                self.repo.mark_status(meeting.meet_code, "recording", audio_path=str(audio_path))
+                reason, participants, duration, actual_end = await MeetMonitor(
+                    session.page,
+                    should_force_exit=lambda: self._claim_force_out(meeting.meet_code),
+                ).run_until_exit()
+                final_path = recorder.stop()
+                recorded_paths.append(final_path)
+                total_duration += duration
+                all_participants.extend(str(item) for item in participants)
+                final_reason = reason
+                if reason == "no_one_joined":
+                    self.repo.mark_status(
+                        meeting.meet_code,
+                        "no_one_joined",
+                        None,
+                        audio_path=str(final_path),
+                        actual_end_utc=meeting.start_utc.isoformat(),
+                    )
+                    self._cleanup_audio()
+                    return
+                if self._should_auto_rejoin_exit(reason, attempt, meeting):
+                    await self._pause_before_auto_rejoin(meeting.meet_code, reason)
+                    continue
+                break
+            except Exception as exc:
+                self.log.exception("meeting_session_failed", meet_code=meeting.meet_code, attempt=attempt + 1)
+                if recorder.is_running():
+                    try:
+                        audio_path = recorder.stop()
+                        recorded_paths.append(audio_path)
+                    except Exception:
+                        self.log.exception("meeting_session_recorder_stop_failed", meet_code=meeting.meet_code)
+                if self._should_auto_rejoin_exception(attempt, meeting):
+                    await self._pause_before_auto_rejoin(meeting.meet_code, str(exc))
+                    continue
                 self.repo.mark_status(
                     meeting.meet_code,
-                    "no_one_joined",
-                    None,
-                    audio_path=str(final_path),
-                    actual_end_utc=meeting.start_utc.isoformat(),
+                    "failed",
+                    str(exc),
+                    audio_path=str(audio_path) if audio_path else None,
                 )
-                self._cleanup_audio()
                 return
+            finally:
+                if session:
+                    await session.close()
+                if sink_name:
+                    remove_session_sink(sink_name)
+                    self.log.info("meeting_session_audio_sink_removed", meet_code=meeting.meet_code, sink=sink_name)
+        if not recorded_paths:
+            self.repo.mark_status(meeting.meet_code, "failed", "no audio recorded")
+            return
+        self.repo.mark_status(
+            meeting.meet_code,
+            "processing",
+            audio_path=str(recorded_paths[-1]),
+            actual_end_utc=actual_end.isoformat(),
+        )
+        output_paths = None
+        participant_names = tuple(dict.fromkeys(all_participants))
+        for path in recorded_paths:
             result = MeetingResult(
                 meeting.meet_code,
-                final_path,
-                duration,
-                reason,
-                participants,
+                path,
+                total_duration,
+                final_reason,
+                participant_names,
                 meeting.title,
                 actual_end,
             )
-            self.repo.mark_status(
-                meeting.meet_code,
-                "processing",
-                audio_path=str(final_path),
-                actual_end_utc=actual_end.isoformat(),
-            )
             output_paths = await self.process_result(result)
-            notes_path, extra_paths = _normalize_output_paths(output_paths)
-            self.repo.mark_delivered(meeting.meet_code, str(notes_path), **extra_paths)
-            self._cleanup_audio()
-        except Exception as exc:
-            self.log.exception("meeting_session_failed", meet_code=meeting.meet_code)
-            if recorder.is_running():
-                audio_path = recorder.stop()
-            self.repo.mark_status(meeting.meet_code, "failed", str(exc), audio_path=str(audio_path) if audio_path else None)
-        finally:
-            if session:
-                await session.close()
-            if sink_name:
-                remove_session_sink(sink_name)
-                self.log.info("meeting_session_audio_sink_removed", meet_code=meeting.meet_code, sink=sink_name)
+        if not output_paths:
+            self.repo.mark_status(meeting.meet_code, "failed", "no output generated", audio_path=str(recorded_paths[-1]))
+            return
+        notes_path, extra_paths = _normalize_output_paths(output_paths)
+        self.repo.mark_delivered(meeting.meet_code, str(notes_path), **extra_paths)
+        self._cleanup_audio()
 
     def _claim_force_out(self, meet_code: str) -> bool:
         command = self.repo.claim_pending_force_out(meet_code)
@@ -112,6 +157,27 @@ class MeetingSession:
             return False
         self.repo.complete_command(command["id"], "done")
         return True
+
+    def _should_auto_rejoin_join(self, status: str, attempt: int, meeting: MeetingEvent) -> bool:
+        return status in AUTO_REJOIN_JOIN_STATUSES and self._can_auto_rejoin(attempt, meeting)
+
+    def _should_auto_rejoin_exit(self, reason: str, attempt: int, meeting: MeetingEvent) -> bool:
+        return reason in AUTO_REJOIN_EXIT_REASONS and self._can_auto_rejoin(attempt, meeting)
+
+    def _should_auto_rejoin_exception(self, attempt: int, meeting: MeetingEvent) -> bool:
+        return self._can_auto_rejoin(attempt, meeting)
+
+    def _can_auto_rejoin(self, attempt: int, meeting: MeetingEvent) -> bool:
+        if attempt >= MAX_AUTO_REJOINS:
+            return False
+        if not meeting.end_utc:
+            return True
+        return datetime.now(UTC) <= meeting.end_utc + timedelta(minutes=5)
+
+    async def _pause_before_auto_rejoin(self, meet_code: str, reason: str) -> None:
+        self.log.warning("meeting_session_auto_rejoin", meet_code=meet_code, reason=reason)
+        self.repo.mark_status(meet_code, "joining", f"auto rejoin: {reason}")
+        await asyncio.sleep(AUTO_REJOIN_DELAY_SECONDS)
 
     def _retention_days(self) -> int:
         if callable(self.audio_retention_days):
