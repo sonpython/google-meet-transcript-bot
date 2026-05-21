@@ -13,8 +13,14 @@ class Transcriber:
         self.chunker = chunker or AudioChunker()
         self.work_dir = work_dir or Path("/tmp/meeting-assistant-gemini")
 
-    async def transcribe(self, audio_path: Path, participants: tuple[str, ...], title: str) -> str:
-        prompt = _build_prompt(participants, title)
+    async def transcribe(
+        self,
+        audio_path: Path,
+        participants: tuple[str, ...],
+        title: str,
+        admin_instruction: str = "",
+    ) -> str:
+        prompt = _build_prompt(participants, title, admin_instruction)
         chunk_dir = self.work_dir / _slug(audio_path.stem)
         chunks = await self.chunker.chunk(audio_path, chunk_dir)
         transcript_parts: list[str] = []
@@ -63,10 +69,13 @@ async def _retry_chunk(operation: Callable[[], Awaitable[str]], index: int) -> s
     )
 
 
-def _build_prompt(participants: tuple[str, ...], title: str) -> str:
+def _build_prompt(participants: tuple[str, ...], title: str, admin_instruction: str = "") -> str:
     prompt = PROMPT_PATH.read_text()
     prompt = prompt.replace("{participant_names}", ", ".join(participants) or "Không rõ")
-    return prompt.replace("{meeting_title}", title or "Không rõ")
+    prompt = prompt.replace("{meeting_title}", title or "Không rõ")
+    if admin_instruction.strip():
+        prompt = f"{prompt}\n\n## Admin instruction for this meeting\n{admin_instruction.strip()}"
+    return prompt
 
 
 def has_hallucination_loop(text: str, max_consecutive: int = 30) -> bool:

@@ -20,6 +20,9 @@ class FakeRepo:
     def mark_processing(self, meet_code, status, batch=0, total=0, error=None):
         self.statuses.append((meet_code, f"processing:{status}", batch, total, error))
 
+    def get(self, meet_code):
+        return {"admin_instruction": ""}
+
     def claim_pending_force_out(self, meet_code):
         return None
 
@@ -264,3 +267,44 @@ async def test_session_auto_rejoins_after_page_closed_even_after_calendar_end(tm
     await session.run(meeting("abc-defg-hij", end_utc=datetime(2026, 1, 1, tzinfo=UTC)))
 
     assert PageClosedThenAloneMonitor.calls == 2
+
+
+@pytest.mark.anyio
+async def test_session_does_not_process_when_end_is_not_confirmed(tmp_path, monkeypatch) -> None:
+    processed = []
+
+    class AlwaysPageClosedMonitor:
+        def __init__(self, page, should_force_exit):
+            pass
+
+        async def run_until_exit(self):
+            return "page_closed", ["Host", "Bot"], 10, datetime.now(UTC)
+
+    async def process_result(result):
+        processed.append(result.audio_path)
+        return await fake_process_result(result)
+
+    monkeypatch.setattr("src.bot.meeting_session.MAX_AUTO_REJOINS", 0)
+    monkeypatch.setattr("src.bot.meeting_session.AudioRecorder", FakeRecorder)
+    monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", FakeMeetJoiner)
+    monkeypatch.setattr("src.bot.meeting_session.MeetMonitor", AlwaysPageClosedMonitor)
+    monkeypatch.setattr("src.bot.meeting_session.create_session_sink", lambda sink: f"{sink}.monitor")
+    monkeypatch.setattr("src.bot.meeting_session.remove_session_sink", lambda sink: None)
+
+    repo = FakeRepo()
+    session = MeetingSession(
+        repo,
+        FakeBrowserFactory(),
+        tmp_path,
+        "meet_capture.monitor",
+        "Bot",
+        process_result,
+    )
+
+    await session.run(meeting("abc-defg-hij"))
+    await session.wait_for_processing()
+
+    assert processed == []
+    assert repo.statuses[-1][1] == "recorded"
+    assert repo.statuses[-1][2] == "meeting end not confirmed: page_closed"
+    assert repo.statuses[-1][4]["meeting_end_confirmed"] == 0

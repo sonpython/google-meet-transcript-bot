@@ -129,6 +129,28 @@ class MeetingsRepo:
         self.conn.commit()
         return int(cur.lastrowid)
 
+    def request_regenerate(self, meet_code: str) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO admin_commands (command, meet_code, status)
+            VALUES ('regenerate', ?, 'pending')
+            """,
+            (meet_code,),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def set_admin_instruction(self, meet_code: str, instruction: str) -> None:
+        self.conn.execute(
+            """
+            UPDATE meetings
+            SET admin_instruction=?, updated_at=CURRENT_TIMESTAMP
+            WHERE meet_code=?
+            """,
+            (instruction, meet_code),
+        )
+        self.conn.commit()
+
     def claim_pending_force_out(self, meet_code: str):
         row = self.conn.execute(
             """
@@ -153,6 +175,26 @@ class MeetingsRepo:
                 """
                 SELECT * FROM admin_commands
                 WHERE command='rejoin' AND status='pending'
+                ORDER BY created_at
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+        for row in rows:
+            self.conn.execute(
+                "UPDATE admin_commands SET status='running', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (row["id"],),
+            )
+        self.conn.commit()
+        return rows
+
+    def claim_pending_regenerates(self, limit: int = 2) -> list:
+        rows = list(
+            self.conn.execute(
+                """
+                SELECT * FROM admin_commands
+                WHERE command='regenerate' AND status='pending'
                 ORDER BY created_at
                 LIMIT ?
                 """,

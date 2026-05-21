@@ -14,8 +14,8 @@ def test_build_inline_escapes_markdown_v2(tmp_path: Path) -> None:
     result = MeetingResult(
         meet_code="abc-defg-hij",
         audio_path=tmp_path / "audio.opus",
-        duration_sec=90,
-        exit_reason="empty_meeting",
+        duration_sec=3484,
+        exit_reason="alone",
         participant_names=("An_Nguyen",),
         title="Weekly (Sync)",
     )
@@ -23,8 +23,11 @@ def test_build_inline_escapes_markdown_v2(tmp_path: Path) -> None:
     inline = build_inline(result, "## TL;DR\nAction [one]")
 
     assert "Weekly \\(Sync\\)" in inline
+    assert "58m 4s" in inline
     assert "An\\_Nguyen" in inline
     assert "Action \\[one\\]" in inline
+    assert "Exit" not in inline
+    assert "alone" not in inline
 
 
 def test_build_notes_file(tmp_path: Path) -> None:

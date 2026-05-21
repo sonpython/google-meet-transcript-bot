@@ -86,13 +86,35 @@ def test_pipeline_writes_outputs(tmp_path: Path) -> None:
     transcript_path, summary_path, minutes_path, notes_path = asyncio.run(pipeline.process(result))
 
     assert transcript_path.exists()
-    assert "## Segment " in summary_path.read_text()
+    assert "## Session " in summary_path.read_text()
     assert "## TL;DR\nSummary content" in summary_path.read_text()
     assert "## Thông Tin Cuộc Họp\nMinutes content" in minutes_path.read_text()
     assert len(client.text_calls) == 2
     assert "# Weekly Sync" in notes_path.read_text()
     assert "## Meeting Minutes" in notes_path.read_text()
     assert "- Meet code: abc-defg-hij" in notes_path.read_text()
+    assert "- Duration: 2m 0s" in notes_path.read_text()
+    assert "Exit reason" not in notes_path.read_text()
+
+
+def test_pipeline_passes_admin_instruction_to_prompts(tmp_path: Path) -> None:
+    client = FakeGeminiClient()
+    pipeline = GeminiPipeline(client, tmp_path / "out")
+    pipeline.transcriber = Transcriber(client, chunker=FakeChunker(), work_dir=tmp_path / "chunks")
+    result = MeetingResult(
+        meet_code="abc-defg-hij",
+        audio_path=tmp_path / "meeting.opus",
+        duration_sec=120,
+        exit_reason="force_out",
+        participant_names=("An",),
+        title="Weekly Sync",
+        admin_instruction="Map Bob to Robert and focus on action items.",
+    )
+
+    asyncio.run(pipeline.process(result))
+
+    assert "Map Bob to Robert" in client.audio_calls[0][1]
+    assert all("Map Bob to Robert" in prompt for prompt in client.text_calls)
 
 
 def test_sanitize_minutes_removes_model_preamble() -> None:

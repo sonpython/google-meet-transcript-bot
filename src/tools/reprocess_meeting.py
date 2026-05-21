@@ -51,22 +51,24 @@ async def main() -> None:
     for path in output_paths:
         path.unlink(missing_ok=True)
 
-    last_paths = None
+    results = []
     for index, audio_path in enumerate(audio_paths, start=1):
         print(f"reprocess {meet_code}: segment {index}/{len(audio_paths)} {audio_path}")
-        result = MeetingResult(
-            meet_code=meet_code,
-            audio_path=audio_path,
-            duration_sec=_duration_seconds(audio_path),
-            exit_reason="reprocess",
-            participant_names=participants,
-            title=title,
+        results.append(
+            MeetingResult(
+                meet_code=meet_code,
+                audio_path=audio_path,
+                duration_sec=_duration_seconds(audio_path),
+                exit_reason="reprocess",
+                participant_names=participants,
+                title=title,
+                admin_instruction=str(row["admin_instruction"] or "") if "admin_instruction" in row.keys() else "",
+            )
         )
-        last_paths = await pipeline.process(result)
 
-    if not last_paths:
+    if not results:
         raise RuntimeError(f"No output generated for {meet_code}")
-    transcript_path, summary_path, minutes_path, notes_path = last_paths
+    transcript_path, summary_path, minutes_path, notes_path = await pipeline.process_many(tuple(results), append=False)
     repo.mark_delivered(
         meet_code,
         str(notes_path),

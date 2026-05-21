@@ -1,7 +1,10 @@
 import asyncio
 import logging
 import signal
+import json
+import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 
 import structlog
 
@@ -44,11 +47,13 @@ def configure_logging(level: str) -> None:
 
 
 def _build_result_processor(settings):
-    async def process(result: MeetingResult):
+    def pipeline() -> GeminiPipeline:
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY is required for meeting processing")
-        gemini = GeminiPipeline(GeminiClient(settings.gemini_api_key, settings.gemini_model), settings.output_dir)
-        transcript_path, summary_path, minutes_path, notes_path = await gemini.process(result)
+        return GeminiPipeline(GeminiClient(settings.gemini_api_key, settings.gemini_model), settings.output_dir)
+
+    async def process(result: MeetingResult):
+        transcript_path, summary_path, minutes_path, notes_path = await pipeline().process(result)
         if settings.delivery_enabled and settings.discord_bot_token and settings.discord_channel_id:
             discord = DiscordDelivery(DiscordClient(settings.discord_bot_token, settings.discord_channel_id))
             summary = summary_path.read_text()
@@ -59,6 +64,20 @@ def _build_result_processor(settings):
             await telegram.deliver(result, notes_path, summary)
         return transcript_path, summary_path, minutes_path, notes_path
 
+    async def process_many(results: tuple[MeetingResult, ...], append: bool = True):
+        transcript_path, summary_path, minutes_path, notes_path = await pipeline().process_many(results, append=append)
+        result = results[-1]
+        if settings.delivery_enabled and settings.discord_bot_token and settings.discord_channel_id:
+            discord = DiscordDelivery(DiscordClient(settings.discord_bot_token, settings.discord_channel_id))
+            summary = summary_path.read_text()
+            await discord.deliver(result, notes_path, summary)
+        elif settings.delivery_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
+            telegram = TelegramDelivery(TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id))
+            summary = summary_path.read_text()
+            await telegram.deliver(result, notes_path, summary)
+        return transcript_path, summary_path, minutes_path, notes_path
+
+    process.process_many = process_many
     return process
 
 
@@ -101,13 +120,14 @@ async def main() -> None:
     repo = MeetingsRepo(connect(settings.db_path))
     browser_factory = BrowserSessionFactory(storage_store, headless=settings.bot_headless)
     keepalive = BotSessionKeepAlive(browser_factory, storage_store, settings.bot_email, settings.bot_password)
+    result_processor = _build_result_processor(settings)
     meeting_session = MeetingSession(
         repo,
         browser_factory,
         settings.audio_dir,
         settings.audio_source,
         settings.bot_display_name,
-        _build_result_processor(settings),
+        result_processor,
         settings.auto_purge_audio,
         lambda: repo.get_audio_retention_days(settings.audio_retention_days),
     )
@@ -148,7 +168,7 @@ async def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop_event.set)
     watcher_task = asyncio.create_task(watcher.run_forever())
-    command_task = asyncio.create_task(_run_admin_command_loop(repo, runner))
+    command_task = asyncio.create_task(_run_admin_command_loop(settings, repo, runner, result_processor))
     await stop_event.wait()
     watcher_task.cancel()
     command_task.cancel()
@@ -156,7 +176,8 @@ async def main() -> None:
     log.info("meeting_assistant_stopping")
 
 
-async def _run_admin_command_loop(repo: MeetingsRepo, runner: JobRunner) -> None:
+async def _run_admin_command_loop(settings, repo: MeetingsRepo, runner: JobRunner, result_processor) -> None:
+    regenerate_tasks: set[asyncio.Task] = set()
     while True:
         for command in repo.claim_pending_rejoins():
             try:
@@ -177,7 +198,126 @@ async def _run_admin_command_loop(repo: MeetingsRepo, runner: JobRunner) -> None
                 repo.complete_command(command["id"])
             except Exception as exc:
                 repo.complete_command(command["id"], "failed", str(exc))
+        for command in repo.claim_pending_regenerates():
+            task = asyncio.create_task(_run_regenerate_command(settings, command, result_processor))
+            regenerate_tasks.add(task)
+            task.add_done_callback(regenerate_tasks.discard)
         await asyncio.sleep(5)
+
+
+async def _run_regenerate_command(settings, command, result_processor) -> None:
+    repo = MeetingsRepo(connect(settings.db_path))
+    meet_code = command["meet_code"]
+    try:
+        row = repo.get(meet_code)
+        if not row:
+            repo.complete_command(command["id"], "failed", "meeting not found")
+            return
+        audio_paths = _audio_paths(settings.audio_dir, meet_code)
+        if not audio_paths:
+            repo.complete_command(command["id"], "failed", "no audio files found")
+            repo.mark_processing(meet_code, "failed", 0, 0, "no audio files found")
+            return
+        repo.mark_processing(meet_code, "running", 0, len(audio_paths))
+        output_paths = _output_paths(settings.output_dir, row["title"] or meet_code)
+        for path in output_paths:
+            path.unlink(missing_ok=True)
+        participants = _participants(row)
+        instruction = str(row["admin_instruction"] or "")
+        results = []
+        for index, audio_path in enumerate(audio_paths, start=1):
+            repo.mark_processing(meet_code, "running", index, len(audio_paths))
+            results.append(
+                MeetingResult(
+                    meet_code=meet_code,
+                    audio_path=audio_path,
+                    duration_sec=_duration_seconds(audio_path),
+                    exit_reason="regenerate",
+                    participant_names=participants,
+                    title=row["title"] or meet_code,
+                    actual_end_utc=_parse_dt(row["actual_end_utc"]),
+                    admin_instruction=instruction,
+                )
+            )
+        transcript_path, summary_path, minutes_path, notes_path = await result_processor.process_many(
+            tuple(results),
+            append=False,
+        )
+        repo.mark_processing(meet_code, "done", len(audio_paths), len(audio_paths))
+        repo.mark_delivered(
+            meet_code,
+            str(notes_path),
+            transcript_path=str(transcript_path),
+            summary_path=str(summary_path),
+            minutes_path=str(minutes_path),
+        )
+        repo.complete_command(command["id"])
+    except Exception as exc:
+        repo.mark_processing(meet_code, "failed", 0, 0, str(exc))
+        repo.complete_command(command["id"], "failed", str(exc))
+    finally:
+        repo.conn.close()
+
+
+def _participants(row) -> tuple[str, ...]:
+    names = []
+    if row["organizer"]:
+        names.append(row["organizer"])
+    if row["attendees"]:
+        try:
+            names.extend(json.loads(row["attendees"]))
+        except json.JSONDecodeError:
+            pass
+    return tuple(dict.fromkeys(str(name) for name in names if name))
+
+
+def _audio_paths(audio_dir: Path, meet_code: str) -> list[Path]:
+    if not audio_dir.exists():
+        return []
+    return sorted(
+        (path for path in audio_dir.glob(f"{meet_code}*.opus") if path.stat().st_size > 0),
+        key=lambda path: (path.stat().st_mtime, path.name),
+    )
+
+
+def _output_paths(output_dir: Path, title: str) -> tuple[Path, Path, Path, Path]:
+    from src.gemini.pipeline import _slug
+
+    slug = _slug(title)
+    return (
+        output_dir / f"transcript-{slug}.md",
+        output_dir / f"summary-{slug}.md",
+        output_dir / f"meeting-minutes-{slug}.md",
+        output_dir / f"meeting-notes-{slug}.md",
+    )
+
+
+def _duration_seconds(path: Path) -> int:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    try:
+        return max(1, int(float(result.stdout.strip())))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_dt(value: str | None):
+    if not value:
+        return None
+    return datetime.fromisoformat(value).astimezone(UTC)
 
 
 if __name__ == "__main__":

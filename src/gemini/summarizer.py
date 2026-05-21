@@ -8,15 +8,19 @@ class Summarizer:
     def __init__(self, client) -> None:
         self.client = client
 
-    async def summarize(self, transcript: str, title: str) -> str:
+    async def summarize(self, transcript: str, title: str, admin_instruction: str = "") -> str:
         prompt = PROMPT_PATH.read_text()
         prompt = prompt.replace("{meeting_title}", title or "Không rõ")
+        if admin_instruction.strip():
+            prompt = f"{prompt}\n\n## Admin instruction for this meeting\n{admin_instruction.strip()}"
         prompt = f"{prompt}\n\n# Transcript\n\n{transcript}"
         return await self.client.generate_text(prompt)
 
-    async def minutes(self, transcript: str, title: str) -> str:
+    async def minutes(self, transcript: str, title: str, admin_instruction: str = "") -> str:
         prompt = MINUTES_PROMPT_PATH.read_text()
         prompt = prompt.replace("{meeting_title}", title or "Không rõ")
+        if admin_instruction.strip():
+            prompt = f"{prompt}\n\n## Admin instruction for this meeting\n{admin_instruction.strip()}"
         prompt = f"{prompt}\n\n# Transcript\n\n{transcript}"
         return sanitize_minutes(await self.client.generate_text(prompt))
 

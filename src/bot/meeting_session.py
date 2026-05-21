@@ -16,6 +16,7 @@ from src.runtime_audio import create_session_sink, remove_session_sink, safe_ses
 AUTO_REJOIN_EXIT_REASONS = {"page_closed"}
 AUTO_REJOIN_JOIN_STATUSES = {"network_error", "timeout"}
 NON_RETRYABLE_JOIN_STATUSES = {"signed_out"}
+CONFIRMED_MEETING_END_REASONS = {"alone", "force_out", "ended", "hard_cap"}
 MAX_AUTO_REJOINS = 2
 AUTO_REJOIN_DELAY_SECONDS = 10
 
@@ -46,6 +47,7 @@ class MeetingSession:
 
     async def run(self, meeting: MeetingEvent) -> None:
         recorded_paths: list[Path] = []
+        recorded_durations: list[int] = []
         total_duration = 0
         all_participants: list[str] = []
         final_reason = "unknown"
@@ -87,6 +89,7 @@ class MeetingSession:
                 ).run_until_exit()
                 final_path = recorder.stop()
                 recorded_paths.append(final_path)
+                recorded_durations.append(duration)
                 total_duration += duration
                 all_participants.extend(str(item) for item in participants)
                 final_reason = reason
@@ -97,6 +100,8 @@ class MeetingSession:
                         None,
                         audio_path=str(final_path),
                         actual_end_utc=meeting.start_utc.isoformat(),
+                        meeting_end_confirmed=1,
+                        meeting_end_reason=reason,
                     )
                     self._cleanup_audio()
                     return
@@ -110,6 +115,7 @@ class MeetingSession:
                     try:
                         audio_path = recorder.stop()
                         recorded_paths.append(audio_path)
+                        recorded_durations.append(0)
                     except Exception:
                         self.log.exception("meeting_session_recorder_stop_failed", meet_code=meeting.meet_code)
                 if self._should_auto_rejoin_exception(attempt, meeting):
@@ -131,15 +137,27 @@ class MeetingSession:
         if not recorded_paths:
             self.repo.mark_status(meeting.meet_code, "failed", "no audio recorded")
             return
+        meeting_end_confirmed = final_reason in CONFIRMED_MEETING_END_REASONS
         self.repo.mark_status(
             meeting.meet_code,
             "recorded",
+            None if meeting_end_confirmed else f"meeting end not confirmed: {final_reason}",
             audio_path=str(recorded_paths[-1]),
             actual_end_utc=actual_end.isoformat(),
+            meeting_end_confirmed=1 if meeting_end_confirmed else 0,
+            meeting_end_reason=final_reason,
         )
+        if not meeting_end_confirmed:
+            self.log.warning(
+                "meeting_session_processing_skipped_unconfirmed_end",
+                meet_code=meeting.meet_code,
+                reason=final_reason,
+            )
+            return
         self._start_processing_task(
             meeting,
             recorded_paths,
+            recorded_durations,
             total_duration,
             final_reason,
             tuple(dict.fromkeys(all_participants)),
@@ -174,6 +192,7 @@ class MeetingSession:
         self,
         meeting: MeetingEvent,
         recorded_paths: list[Path],
+        recorded_durations: list[int],
         total_duration: int,
         final_reason: str,
         participant_names: tuple[str, ...],
@@ -183,6 +202,7 @@ class MeetingSession:
             self._process_recordings(
                 meeting,
                 recorded_paths,
+                recorded_durations,
                 total_duration,
                 final_reason,
                 participant_names,
@@ -196,6 +216,7 @@ class MeetingSession:
         self,
         meeting: MeetingEvent,
         recorded_paths: list[Path],
+        recorded_durations: list[int],
         total_duration: int,
         final_reason: str,
         participant_names: tuple[str, ...],
@@ -208,19 +229,31 @@ class MeetingSession:
             current_batch = 0
             try:
                 self.repo.mark_processing(meeting.meet_code, "running", 0, total)
+                admin_instruction = self._admin_instruction(meeting.meet_code)
+                results = []
                 for index, path in enumerate(recorded_paths, start=1):
-                    current_batch = index
-                    self.repo.mark_processing(meeting.meet_code, "running", index, total)
-                    result = MeetingResult(
+                    duration = recorded_durations[index - 1] if index - 1 < len(recorded_durations) else 0
+                    results.append(
+                        MeetingResult(
                         meeting.meet_code,
                         path,
-                        total_duration,
+                        duration,
                         final_reason,
                         participant_names,
                         meeting.title,
                         actual_end,
+                        admin_instruction,
                     )
-                    output_paths = await self.process_result(result)
+                    )
+                if hasattr(self.process_result, "process_many"):
+                    current_batch = total
+                    self.repo.mark_processing(meeting.meet_code, "running", total, total)
+                    output_paths = await self.process_result.process_many(tuple(results))
+                else:
+                    for index, result in enumerate(results, start=1):
+                        current_batch = index
+                        self.repo.mark_processing(meeting.meet_code, "running", index, total)
+                        output_paths = await self.process_result(result)
                 if not output_paths:
                     raise RuntimeError("no output generated")
                 notes_path, extra_paths = _normalize_output_paths(output_paths)
@@ -237,6 +270,12 @@ class MeetingSession:
                     str(exc),
                 )
                 self.repo.mark_status(meeting.meet_code, "recorded", f"processing failed: {exc}")
+
+    def _admin_instruction(self, meet_code: str) -> str:
+        row = self.repo.get(meet_code)
+        if not row:
+            return ""
+        return str(row["admin_instruction"] or "") if "admin_instruction" in row.keys() else ""
 
     async def wait_for_processing(self) -> None:
         if self._processing_tasks:

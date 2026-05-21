@@ -43,3 +43,30 @@ def test_event_meet_code_extracts_hangout_link() -> None:
     event = {"hangoutLink": "https://meet.google.com/arq-guqp-pvd?authuser=0"}
 
     assert health_server._event_meet_code(event) == "arq-guqp-pvd"
+
+
+def test_regenerate_saves_instruction_and_queues_command(tmp_path: Path, monkeypatch) -> None:
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(health_server, "load_settings", lambda: settings)
+    conn = connect(settings.db_path)
+    conn.execute(
+        """
+        INSERT INTO meetings (meet_code, event_id, scheduled_start_utc, title, status)
+        VALUES ('abc-defg-hij', 'event-1', '2026-05-20T09:00:00+00:00', 'Weekly Sync', 'recorded')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    result = health_server._request_regenerate(
+        "abc-defg-hij",
+        {"admin_instruction": "Map Sơn to Michael."},
+    )
+
+    assert result["ok"] is True
+    conn = connect(settings.db_path)
+    meeting = conn.execute("SELECT * FROM meetings WHERE meet_code='abc-defg-hij'").fetchone()
+    command = conn.execute("SELECT * FROM admin_commands WHERE meet_code='abc-defg-hij'").fetchone()
+    assert meeting["admin_instruction"] == "Map Sơn to Michael."
+    assert meeting["processing_status"] == "queued"
+    assert command["command"] == "regenerate"

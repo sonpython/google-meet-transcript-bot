@@ -12,3 +12,4 @@ class MeetingResult:
     participant_names: tuple[str, ...]
     title: str = ""
     actual_end_utc: datetime | None = None
+    admin_instruction: str = ""
