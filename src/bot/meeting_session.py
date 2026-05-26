@@ -6,9 +6,10 @@ from pathlib import Path
 
 import structlog
 
-from src.bot.audio_recorder import AudioRecorder
 from src.bot.meet_joiner import MeetJoiner
 from src.bot.meet_monitor import MeetMonitor
+from src.bot.recorder_supervisor import RecorderSupervisor
+from src.bot.screenshot_capturer import PeriodicScreenshotCapturer
 from src.models.meeting_event import MeetingEvent
 from src.models.meeting_result import MeetingResult
 from src.runtime_audio import create_session_sink, remove_session_sink, safe_session_sink_name
@@ -32,6 +33,9 @@ class MeetingSession:
         process_result,
         auto_purge_audio: bool = True,
         audio_retention_days: int | Callable[[], int] = 10,
+        screenshot_dir: Path | None = None,
+        screenshot_interval_seconds: int = 5 * 60,
+        screenshot_capture_enabled: bool = True,
     ) -> None:
         self.repo = repo
         self.browser_factory = browser_factory
@@ -41,6 +45,9 @@ class MeetingSession:
         self.process_result = process_result
         self.auto_purge_audio = auto_purge_audio
         self.audio_retention_days = audio_retention_days
+        self.screenshot_dir = screenshot_dir
+        self.screenshot_interval_seconds = screenshot_interval_seconds
+        self.screenshot_capture_enabled = screenshot_capture_enabled
         self.log = structlog.get_logger(__name__)
         self._processing_tasks: set[asyncio.Task] = set()
         self._processing_locks: dict[str, asyncio.Lock] = {}
@@ -54,8 +61,9 @@ class MeetingSession:
         actual_end = meeting.start_utc
         for attempt in range(MAX_AUTO_REJOINS + 1):
             session = None
-            recorder = AudioRecorder(self.audio_dir, self.audio_source)
-            audio_path = None
+            recorder = None
+            screenshot_capturer = None
+            first_audio_path = None
             sink_name = None
             monitor_source = self.audio_source
             try:
@@ -81,16 +89,18 @@ class MeetingSession:
                         continue
                     self.repo.mark_status(meeting.meet_code, "failed", error)
                     return
-                audio_path = recorder.start(meeting.meet_code, audio_source=monitor_source)
-                self.repo.mark_status(meeting.meet_code, "recording", audio_path=str(audio_path))
+                recorder = RecorderSupervisor(self.audio_dir, self.audio_source, meeting.meet_code, monitor_source)
+                first_audio_path = recorder.start()
+                self.repo.mark_status(meeting.meet_code, "recording", audio_path=str(first_audio_path))
+                screenshot_capturer = self._start_screenshot_capture(session.page, meeting.meet_code)
                 reason, participants, duration, actual_end = await MeetMonitor(
                     session.page,
                     should_force_exit=lambda: self._claim_force_out(meeting.meet_code),
                 ).run_until_exit()
-                final_path = recorder.stop()
-                recorded_paths.append(final_path)
-                recorded_durations.append(duration)
-                total_duration += duration
+                await recorder.stop()
+                recorded_paths.extend(recorder.paths)
+                recorded_durations.extend(recorder.durations)
+                total_duration += sum(recorder.durations) or duration
                 all_participants.extend(str(item) for item in participants)
                 final_reason = reason
                 if reason == "no_one_joined":
@@ -98,7 +108,7 @@ class MeetingSession:
                         meeting.meet_code,
                         "no_one_joined",
                         None,
-                        audio_path=str(final_path),
+                        audio_path=str(recorded_paths[-1]) if recorded_paths else str(first_audio_path),
                         actual_end_utc=meeting.start_utc.isoformat(),
                         meeting_end_confirmed=1,
                         meeting_end_reason=reason,
@@ -111,11 +121,11 @@ class MeetingSession:
                 break
             except Exception as exc:
                 self.log.exception("meeting_session_failed", meet_code=meeting.meet_code, attempt=attempt + 1)
-                if recorder.is_running():
+                if recorder and recorder.is_running():
                     try:
-                        audio_path = recorder.stop()
-                        recorded_paths.append(audio_path)
-                        recorded_durations.append(0)
+                        await recorder.stop()
+                        recorded_paths.extend(recorder.paths)
+                        recorded_durations.extend(recorder.durations)
                     except Exception:
                         self.log.exception("meeting_session_recorder_stop_failed", meet_code=meeting.meet_code)
                 if self._should_auto_rejoin_exception(attempt, meeting):
@@ -125,10 +135,12 @@ class MeetingSession:
                     meeting.meet_code,
                     "failed",
                     str(exc),
-                    audio_path=str(audio_path) if audio_path else None,
+                    audio_path=str(recorded_paths[-1]) if recorded_paths else (str(first_audio_path) if first_audio_path else None),
                 )
                 return
             finally:
+                if screenshot_capturer:
+                    await screenshot_capturer.stop()
                 if session:
                     await session.close()
                 if sink_name:
@@ -170,6 +182,18 @@ class MeetingSession:
             return False
         self.repo.complete_command(command["id"], "done")
         return True
+
+    def _start_screenshot_capture(self, page, meet_code: str) -> PeriodicScreenshotCapturer | None:
+        if not self.screenshot_capture_enabled or not self.screenshot_dir:
+            return None
+        capturer = PeriodicScreenshotCapturer(
+            page,
+            self.screenshot_dir,
+            meet_code,
+            self.screenshot_interval_seconds,
+        )
+        capturer.start()
+        return capturer
 
     def _should_auto_rejoin_join(self, status: str, attempt: int, meeting: MeetingEvent) -> bool:
         return status in AUTO_REJOIN_JOIN_STATUSES and self._can_auto_rejoin(attempt, meeting)

@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 
 from src.bot.audio_recorder import AudioRecorder
@@ -12,6 +14,7 @@ def test_recorder_fails_fast_when_audio_source_missing(tmp_path) -> None:
 
 def test_recorder_start_uses_explicit_audio_source(tmp_path, monkeypatch) -> None:
     calls = []
+    kwargs_seen = []
 
     class FakeProcess:
         stderr = None
@@ -21,6 +24,7 @@ def test_recorder_start_uses_explicit_audio_source(tmp_path, monkeypatch) -> Non
 
     def fake_popen(args, **kwargs):
         calls.append(args)
+        kwargs_seen.append(kwargs)
         return FakeProcess()
 
     monkeypatch.setattr("src.bot.audio_recorder.subprocess.Popen", fake_popen)
@@ -31,3 +35,6 @@ def test_recorder_start_uses_explicit_audio_source(tmp_path, monkeypatch) -> Non
 
     assert "-i" in calls[0]
     assert calls[0][calls[0].index("-i") + 1] == "session.monitor"
+    assert "-nostats" in calls[0]
+    assert calls[0][calls[0].index("-loglevel") + 1] == "error"
+    assert kwargs_seen[0]["stderr"] is not subprocess.PIPE

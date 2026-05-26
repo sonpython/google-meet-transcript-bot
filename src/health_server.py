@@ -20,6 +20,11 @@ from src.state.db import connect
 from src.state.meetings_repo import TERMINAL_STATUSES, MeetingsRepo
 
 
+class AdminHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
+
+
 class AdminHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -97,6 +102,10 @@ class AdminHandler(BaseHTTPRequestHandler):
                 meet_code = unquote(suffix.removeprefix("meetings/").removesuffix("/audio"))
                 index = int(parse_qs(parsed.query).get("index", ["0"])[0] or "0")
                 self._send_audio(meet_code, index)
+            elif suffix.startswith("meetings/") and suffix.endswith("/screenshots"):
+                meet_code = unquote(suffix.removeprefix("meetings/").removesuffix("/screenshots"))
+                index = int(parse_qs(parsed.query).get("index", ["0"])[0] or "0")
+                self._send_screenshot(meet_code, index)
             elif suffix.startswith("meetings/"):
                 self._send_json({"meeting": _meeting_detail(unquote(suffix.removeprefix("meetings/")))})
             elif suffix == "upcoming":
@@ -208,6 +217,23 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         self.send_response(200)
         self.send_header("Content-Type", "audio/ogg; codecs=opus")
+        self.send_header("Content-Length", str(path.stat().st_size))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 256):
+                self.wfile.write(chunk)
+
+    def _send_screenshot(self, meet_code: str, index: int = 0) -> None:
+        detail = _meeting_detail(meet_code)
+        screenshots = detail.get("files", {}).get("screenshots", [])
+        screenshot = screenshots[index] if 0 <= index < len(screenshots) else {}
+        path = Path(screenshot.get("path", ""))
+        if not screenshot.get("exists") or not path.exists():
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
         self.send_header("Content-Length", str(path.stat().st_size))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -433,6 +459,7 @@ def _meeting_detail(meet_code: str, include_audio_peaks: bool = False) -> dict:
         _audio_segment_paths(meet_code, settings.audio_dir),
         include_peaks=include_audio_peaks,
     )
+    files["screenshots"] = _screenshot_payloads(_screenshot_paths(meet_code, settings.screenshot_dir))
     meeting["files"] = files
     meeting["metadata"] = {
         "meet_code": meeting.get("meet_code"),
@@ -679,6 +706,24 @@ def _audio_segment_paths(meet_code: str, audio_dir: Path) -> list[Path]:
     return paths
 
 
+def _screenshot_paths(meet_code: str, screenshot_dir: Path) -> list[Path]:
+    if not screenshot_dir.exists():
+        return []
+    meeting_dir = screenshot_dir / meet_code
+    candidates = list(meeting_dir.glob("*.png")) if meeting_dir.exists() else []
+    candidates.extend(screenshot_dir.glob(f"{meet_code}-*.png"))
+    return sorted(set(candidates), key=lambda path: path.stat().st_mtime)
+
+
+def _screenshot_payloads(paths: list[Path]) -> list[dict]:
+    payloads = []
+    for index, path in enumerate(paths):
+        payload = _file_payload(path)
+        payload["index"] = index
+        payloads.append(payload)
+    return payloads
+
+
 def _audio_segment_payloads(paths: list[Path], include_peaks: bool = False) -> list[dict]:
     payloads = []
     cursor = 0
@@ -886,8 +931,8 @@ button,input,textarea,.button-link{border:1px solid #334155;background:#182235;c
 .pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;border-top:1px solid #263244}.pagination .pager-actions{display:flex;gap:8px}.pagination button:disabled{opacity:.45;cursor:not-allowed}
 .muted{color:#94a3b8}.status{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 8px;background:#1e293b;color:#c7d2fe;font-size:12px;line-height:1.35}.status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}.status.failed{background:#451a1a;color:#fecaca}.status.delivered{background:#102f20;color:#86efac}.status.no_one_joined,.status.recorded{background:#1f2937;color:#cbd5e1}.status.recording,.status.processing-running{background:#422006;color:#fde68a}.status.processing-done{background:#102f20;color:#86efac}.status.processing-failed{background:#451a1a;color:#fecaca}.status.processing-queued{background:#172554;color:#bfdbfe}.status.scheduled{background:#172554;color:#93c5fd}.status.joining{background:#312e81;color:#c4b5fd}.status.upcoming{background:#0c2d48;color:#7dd3fc}.status.checking{background:#172554;color:#bfdbfe}.status.checking .dots span,.status.processing-running .dots span,.status.processing-queued .dots span{animation:dotPulse 1.2s infinite;opacity:.25}.status.checking .dots span:nth-child(2),.status.processing-running .dots span:nth-child(2),.status.processing-queued .dots span:nth-child(2){animation-delay:.2s}.status.checking .dots span:nth-child(3),.status.processing-running .dots span:nth-child(3),.status.processing-queued .dots span:nth-child(3){animation-delay:.4s}@keyframes dotPulse{0%,80%,100%{opacity:.25}40%{opacity:1}}
 .detail{min-height:520px}.empty-detail{padding:14px}.detail-body{padding:14px}.meta-grid{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid #1f2937}.kv{display:grid;grid-template-columns:minmax(112px,34%) 1fr;gap:8px;padding:8px 12px 8px 0;border-bottom:1px solid #1f2937;min-width:0}.kv:nth-child(odd){border-right:1px solid #1f2937}.kv.wide{display:block;grid-column:1/-1;border-right:0;padding:12px 0 14px}.kv.wide>.muted{margin-bottom:8px}.kv.wide>div:last-child{width:100%}.kv>div{min-width:0}.instruction-box{margin:12px 0 16px;border:1px solid #263244;border-radius:8px;background:#0b1220;padding:12px;display:flex;flex-direction:column;gap:10px}.instruction-box h3{font-size:13px}.instruction-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.ai-progress{height:8px;background:#111827;border:1px solid #263244;border-radius:999px;overflow:hidden}.ai-progress-fill{height:100%;width:0;background:linear-gradient(90deg,#38bdf8,#22c55e);transition:width .25s ease}.code-block{margin:12px 0 18px;border:1px solid #263244;border-radius:8px;overflow:hidden;background:#050914}.code-head{height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#111827;border-bottom:1px solid #263244}.code-head h3{font-size:13px}.code-actions{display:flex;align-items:center;gap:6px}.copy-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}.copy-btn svg{width:15px;height:15px}.copied{background:#103224!important;border-color:#166534!important;color:#86efac!important}pre{white-space:pre-wrap;background:#050914;color:#e5e7eb;margin:0;padding:12px;max-height:360px;overflow:auto}
-.audio-loader{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.audio-stage.is-hidden{display:none}.continuous-player{display:flex;flex-direction:column;gap:8px;width:100%;max-width:none}.audio-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.audio-main{min-width:72px}.segments-row{display:flex;flex-wrap:wrap;gap:6px}.segment-chip{height:28px;padding:0 8px;border-radius:999px;font-size:12px;display:inline-flex;align-items:center;gap:5px}.segment-chip span{color:#94a3b8;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}.segment-chip.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}.segment-chip.active span{color:#bae6fd}.segment-chip:disabled{opacity:.45;cursor:not-allowed}.progress-bar{width:100%;height:34px;background:#111827;border-radius:8px;cursor:pointer;overflow:hidden;border:1px solid #334155;position:relative}.progress-bar.loading{cursor:wait}.waveform-bg{position:absolute;inset:3px 4px;display:flex;align-items:center;gap:1px;opacity:.7;pointer-events:none}.wave-bar{flex:1;min-width:1px;border-radius:999px;background:#475569;opacity:.22}.wave-bar.loaded{background:#7dd3fc;opacity:.65}.load-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(148,163,184,.12);pointer-events:none}.progress-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,rgba(56,189,248,.28),rgba(56,189,248,.08));border-right:2px solid #38bdf8;pointer-events:none}.rate-btns{display:flex;gap:4px}.rate-btn{height:26px;padding:0 7px;font-size:12px}.rate-btn.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}.audio-note{font-size:12px}.login{min-height:100vh;display:grid;place-items:center;background:#070b12}.login-box{width:min(360px,calc(100vw - 32px));background:#0f172a;border:1px solid #263244;border-radius:8px;padding:20px;display:flex;flex-direction:column;gap:10px}.login-box input{height:36px;border:1px solid #334155;background:#070b12;color:#e5e7eb;border-radius:6px;padding:0 10px}.error{color:#fca5a5;margin:0}audio{width:100%;height:34px}
-@media(max-width:900px){.grid{grid-template-columns:1fr}.filters,.settings-row,.manual-join{grid-template-columns:1fr 1fr}.manual-join{width:100%;min-width:0}.manual-join input{grid-column:1/-1}.settings-row label{grid-column:1/-1}.timeline-row{grid-template-columns:16px 74px minmax(0,1fr);gap:10px;padding:11px 10px}.timeline-time{font-size:13px}.timeline-title{font-size:15px}.timeline-title-row,.timeline-meta-row{grid-template-columns:1fr}.timeline-code{justify-self:start}.meet-code{flex-wrap:wrap}.meet-code-text{white-space:normal;overflow-wrap:anywhere}.meta-grid{grid-template-columns:1fr}.kv{grid-column:auto;grid-template-columns:132px 1fr;border-right:0;padding-right:0}.kv.wide{display:block;grid-column:auto;border-right:0;padding-right:0}}
+.screenshot-strip{display:flex;gap:10px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x mandatory;padding:2px 0 8px;max-width:100%}.shot-thumb{flex:0 0 172px;height:104px;padding:0;border-radius:7px;overflow:hidden;position:relative;background:#050914;border-color:#334155;scroll-snap-align:start}.shot-thumb img{width:100%;height:100%;object-fit:cover;display:block}.shot-thumb span{position:absolute;left:6px;bottom:6px;min-width:24px;height:20px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:rgba(15,23,42,.78);color:#e5e7eb;font-size:11px}.shot-thumb:hover{border-color:#38bdf8}.lightbox-open{overflow:hidden}.lightbox{position:fixed;inset:0;z-index:50;background:rgba(3,7,18,.92);display:none;align-items:center;justify-content:center;padding:54px 64px}.lightbox.open{display:flex}.lightbox-img{max-width:100%;max-height:calc(100vh - 122px);object-fit:contain;border:1px solid #334155;border-radius:8px;background:#020617}.lightbox-top{position:absolute;left:18px;right:18px;top:14px;display:flex;align-items:center;justify-content:space-between;gap:12px}.lightbox-count{color:#cbd5e1;font-size:13px}.lightbox-close,.lightbox-prev,.lightbox-next{position:absolute;width:40px;height:40px;padding:0;border-radius:999px;background:#111827cc;border-color:#475569;font-size:22px;line-height:1}.lightbox-close{right:18px;top:12px}.lightbox-prev{left:14px;top:50%;transform:translateY(-50%)}.lightbox-next{right:14px;top:50%;transform:translateY(-50%)}.audio-loader{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.audio-stage.is-hidden{display:none}.continuous-player{display:flex;flex-direction:column;gap:8px;width:100%;max-width:none}.audio-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.audio-main{min-width:72px}.segments-row{display:flex;flex-wrap:wrap;gap:6px}.segment-chip{height:28px;padding:0 8px;border-radius:999px;font-size:12px;display:inline-flex;align-items:center;gap:5px}.segment-chip span{color:#94a3b8;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}.segment-chip.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}.segment-chip.active span{color:#bae6fd}.segment-chip:disabled{opacity:.45;cursor:not-allowed}.progress-bar{width:100%;height:34px;background:#111827;border-radius:8px;cursor:pointer;overflow:hidden;border:1px solid #334155;position:relative}.progress-bar.loading{cursor:wait}.waveform-bg{position:absolute;inset:3px 4px;display:flex;align-items:center;gap:1px;opacity:.7;pointer-events:none}.wave-bar{flex:1;min-width:1px;border-radius:999px;background:#475569;opacity:.22}.wave-bar.loaded{background:#7dd3fc;opacity:.65}.load-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(148,163,184,.12);pointer-events:none}.progress-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,rgba(56,189,248,.28),rgba(56,189,248,.08));border-right:2px solid #38bdf8;pointer-events:none}.rate-btns{display:flex;gap:4px}.rate-btn{height:26px;padding:0 7px;font-size:12px}.rate-btn.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}.audio-note{font-size:12px}.login{min-height:100vh;display:grid;place-items:center;background:#070b12}.login-box{width:min(360px,calc(100vw - 32px));background:#0f172a;border:1px solid #263244;border-radius:8px;padding:20px;display:flex;flex-direction:column;gap:10px}.login-box input{height:36px;border:1px solid #334155;background:#070b12;color:#e5e7eb;border-radius:6px;padding:0 10px}.error{color:#fca5a5;margin:0}audio{width:100%;height:34px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.filters,.settings-row,.manual-join{grid-template-columns:1fr 1fr}.manual-join{width:100%;min-width:0}.manual-join input{grid-column:1/-1}.settings-row label{grid-column:1/-1}.timeline-row{grid-template-columns:16px 74px minmax(0,1fr);gap:10px;padding:11px 10px}.timeline-time{font-size:13px}.timeline-title{font-size:15px}.timeline-title-row,.timeline-meta-row{grid-template-columns:1fr}.timeline-code{justify-self:start}.meet-code{flex-wrap:wrap}.meet-code-text{white-space:normal;overflow-wrap:anywhere}.meta-grid{grid-template-columns:1fr}.kv{grid-column:auto;grid-template-columns:132px 1fr;border-right:0;padding-right:0}.kv.wide{display:block;grid-column:auto;border-right:0;padding-right:0}.shot-thumb{flex-basis:150px;height:90px}.lightbox{padding:54px 12px}.lightbox-prev,.lightbox-next{top:auto;bottom:14px;transform:none}.lightbox-img{max-height:calc(100vh - 142px)}}
 </style>"""
 
 
@@ -905,6 +950,7 @@ function checkingBadge(){return `<span class="status checking">Checking<span cla
 let allMeetings=[];
 const urlState=new URLSearchParams(window.location.search);
 let selectedMeeting=urlState.get('meeting')||'';
+let currentMeetingDetail=null;
 let currentPage=Number(urlState.get('page')||'1')||1;
 let detailPollTimer=null;
 let watchedMeeting='';
@@ -934,9 +980,9 @@ function timeRange(m){const start=timeText(m.scheduled_start_utc); const end=tim
 function dateTimeRange(m){const start=fmt(m.scheduled_start_utc); const end=m.scheduled_end_utc?timeText(m.scheduled_end_utc):''; return end?`${start} - ${end}`:start;}
 function timeText(v){if(!v)return ''; try{return new Date(v).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}).replace(' ', '').toLowerCase();}catch{return '';}}
 function normalizeMeetCode(value){const match=String(value||'').trim().toLowerCase().match(/([a-z]{3})-?([a-z]{4})-?([a-z]{3})/); return match?`${match[1]}-${match[2]}-${match[3]}`:'';}
-async function loadDetail(code,{push=true,lock=true}={}){selectedMeeting=code; if(push)updateUrl({code,page:currentPage}); if(lock){detailLoadingCode=code; renderMeetings(currentPage,{push:false}); document.getElementById('detail').innerHTML=`<div class="detail-loading"><div class="loader">Loading meeting detail...</div></div>`;} try{const d=await api('meetings/'+encodeURIComponent(code)); const m=d.meeting; const files=m.files||{}; if(pendingAction?.code===code&&m.status!==pendingAction.fromStatus)pendingAction=null; const statusHtml=pendingAction?.code===code?checkingBadge():badge(m.status); if(lock)detailLoadingCode=''; renderMeetings(currentPage,{push:false}); document.getElementById('detail').innerHTML=`<div class="detail-body"><h3>${esc(m.title)}</h3><p>${actionButtons(m)}</p>
+async function loadDetail(code,{push=true,lock=true}={}){selectedMeeting=code; if(push)updateUrl({code,page:currentPage}); if(lock){detailLoadingCode=code; renderMeetings(currentPage,{push:false}); document.getElementById('detail').innerHTML=`<div class="detail-loading"><div class="loader">Loading meeting detail...</div></div>`;} try{const d=await api('meetings/'+encodeURIComponent(code)); const m=d.meeting; currentMeetingDetail=m; const files=m.files||{}; if(pendingAction?.code===code&&m.status!==pendingAction.fromStatus)pendingAction=null; const statusHtml=pendingAction?.code===code?checkingBadge():badge(m.status); if(lock)detailLoadingCode=''; renderMeetings(currentPage,{push:false}); document.getElementById('detail').innerHTML=`<div class="detail-body"><h3>${esc(m.title)}</h3><p>${actionButtons(m)}</p>
 <div class="meta-grid">${kv('Status',statusHtml)}${kv('AI processing',processingLine(m))}${kv('Meeting ended',meetingEndedLine(m))}${kv('Meet code',meetCodeTools(m.meet_code))}${kv('Event ID',esc(m.event_id))}${kv('Host',esc(m.organizer||''))}${kv('Attendees',attendeeList(m.attendees))}${kv('Start',fmt(m.scheduled_start_utc))}${kv('End',fmt(m.scheduled_end_utc))}${kv('Actual meet end',fmt(m.actual_end_utc))}${kv('Delivered',fmt(m.delivered_at))}${m.last_error?kv('Error',esc(m.last_error)):''}</div>${kv('Listen',audioPlayer(m),'wide')}
-${instructionBox(m)}${codeBlock('Meeting Minutes',files.minutes?.content||'',{pdf:true,optional:true})}${codeBlock('Summary',files.summary?.content||'',{optional:true})}${codeBlock('Transcript',files.transcript?.content||'')}${codeBlock('Notes',files.notes?.content||'',{optional:true})}</div>`; initAudioPlayers();}catch(e){if(lock){detailLoadingCode=''; renderMeetings(currentPage,{push:false});} document.getElementById('detail').innerHTML=`<div class="empty-detail error">Failed to load meeting: ${esc(e.message||String(e))}</div>`; throw e;}}
+${kv('Screenshots',screenshotGallery(m),'wide')}${instructionBox(m)}${codeBlock('Meeting Minutes',files.minutes?.content||'',{pdf:true,optional:true})}${codeBlock('Summary',files.summary?.content||'',{optional:true})}${codeBlock('Transcript',files.transcript?.content||'')}${codeBlock('Notes',files.notes?.content||'',{optional:true})}</div>`; initAudioPlayers();}catch(e){if(lock){detailLoadingCode=''; renderMeetings(currentPage,{push:false});} document.getElementById('detail').innerHTML=`<div class="empty-detail error">Failed to load meeting: ${esc(e.message||String(e))}</div>`; throw e;}}
 function actionButtons(m){const rejoin=`<button onclick="rejoin('${esc(m.meet_code)}')">Rejoin</button>`; const out=m.status==='recording'?` <button class="danger" onclick="forceOut('${esc(m.meet_code)}')">Out</button>`:''; return rejoin+out;}
 function swalOptions(extra){return {background:'#0f172a',color:'#e5e7eb',confirmButtonColor:'#2563eb',cancelButtonColor:'#475569',...extra};}
 async function notify(icon,title,text=''){if(window.Swal){await Swal.fire(swalOptions({icon,title,text,toast:true,position:'top-end',timer:1800,showConfirmButton:false,timerProgressBar:true}));return;} console[icon==='error'?'error':'log']([title,text].filter(Boolean).join(' '));}
@@ -959,6 +1005,14 @@ function copyIcon(){return `<svg aria-hidden="true" viewBox="0 0 24 24" fill="no
 function linkIcon(){return `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.07 0l3.54-3.54a5 5 0 0 0-7.07-7.07L11.5 4.43"></path><path d="M14 11a5 5 0 0 0-7.07 0L3.39 14.54a5 5 0 0 0 7.07 7.07l2.04-2.04"></path></svg>`;}
 function attendeeList(v){if(Array.isArray(v)&&v.length)return v.map(esc).join('<br>'); return 'missing';}
 function fileLine(f){return f?.exists?`${esc(f.path)} <span class="muted">(${f.size} bytes)</span>`:'missing'}
+let screenshotLightbox=null;
+function screenshotGallery(m){const shots=(m.files?.screenshots||[]).filter(f=>f?.exists&&f?.size>0); if(!shots.length)return 'missing'; return `<div class="screenshot-strip" aria-label="Meeting screenshots">${shots.map((shot,i)=>`<button class="shot-thumb" onclick="openScreenshotLightbox(${i})" title="Open screenshot ${i+1}" aria-label="Open screenshot ${i+1}"><img loading="lazy" src="${screenshotSrc(m.meet_code,shot.index??i)}" alt="Meeting screenshot ${i+1}"><span>${i+1}</span></button>`).join('')}</div>`;}
+function screenshotSrc(code,index){return `/admin/api/meetings/${encodeURIComponent(code)}/screenshots?index=${encodeURIComponent(index)}`;}
+function openScreenshotLightbox(index=0){const m=currentMeetingDetail; const shots=(m?.files?.screenshots||[]).filter(f=>f?.exists&&f?.size>0); if(!m||!shots.length)return; screenshotLightbox={meetCode:m.meet_code,items:shots,index:Math.max(0,Math.min(index,shots.length-1)),touchX:null}; renderScreenshotLightbox(); document.body.classList.add('lightbox-open');}
+function closeScreenshotLightbox(){document.getElementById('screenshotLightbox')?.classList.remove('open'); document.body.classList.remove('lightbox-open'); screenshotLightbox=null;}
+function moveScreenshotLightbox(delta){if(!screenshotLightbox)return; const total=screenshotLightbox.items.length; screenshotLightbox.index=(screenshotLightbox.index+delta+total)%total; renderScreenshotLightbox();}
+function renderScreenshotLightbox(){if(!screenshotLightbox)return; let root=document.getElementById('screenshotLightbox'); if(!root){root=document.createElement('div'); root.id='screenshotLightbox'; root.className='lightbox'; root.setAttribute('role','dialog'); root.setAttribute('aria-modal','true'); root.onclick=e=>{if(e.target===root)closeScreenshotLightbox();}; root.addEventListener('touchstart',e=>{screenshotLightbox.touchX=e.changedTouches[0]?.clientX??null;},{passive:true}); root.addEventListener('touchend',e=>{if(screenshotLightbox?.touchX==null)return; const dx=(e.changedTouches[0]?.clientX??screenshotLightbox.touchX)-screenshotLightbox.touchX; if(Math.abs(dx)>40)moveScreenshotLightbox(dx>0?-1:1); screenshotLightbox.touchX=null;},{passive:true}); document.body.appendChild(root);} const shot=screenshotLightbox.items[screenshotLightbox.index]; const src=screenshotSrc(screenshotLightbox.meetCode,shot.index??screenshotLightbox.index); root.innerHTML=`<div class="lightbox-top"><span class="lightbox-count">${screenshotLightbox.index+1} / ${screenshotLightbox.items.length}</span><button class="lightbox-close" onclick="closeScreenshotLightbox()" aria-label="Close">x</button></div><button class="lightbox-prev" onclick="moveScreenshotLightbox(-1)" aria-label="Previous">&lt;</button><img class="lightbox-img" src="${src}" alt="Meeting screenshot ${screenshotLightbox.index+1}"><button class="lightbox-next" onclick="moveScreenshotLightbox(1)" aria-label="Next">&gt;</button>`; root.classList.add('open');}
+document.addEventListener('keydown',event=>{if(!screenshotLightbox)return; if(event.key==='Escape')closeScreenshotLightbox(); if(event.key==='ArrowLeft')moveScreenshotLightbox(-1); if(event.key==='ArrowRight')moveScreenshotLightbox(1);});
 let continuousPlayer=null;
 function audioPlayer(m){const segments=(m.files?.audio_segments||[]).filter(f=>f?.exists&&f?.size>0&&f?.duration_seconds>0); if(!segments.length)return 'missing'; const total=segments[segments.length-1]?.end_second||0; const count=segments.length; return `<div class="continuous-player" data-meet-code="${esc(m.meet_code)}" data-count="${count}" data-total="${total}"><div class="audio-loader"><button id="loadAudioBtn" onclick="loadAudioMeta()">Load audio</button><span id="audioLoadStatus" class="muted">${count} segment${count>1?'s':''} · ${formatDuration(total)}</span></div><div id="audioStage" class="audio-stage is-hidden"><div class="audio-toolbar"><button class="audio-main" onclick="toggleContinuousAudio()" disabled>Play</button><span id="audioNow" class="muted">Segment 1 / ${count}</span><span id="audioTime" class="muted">0:00 / ${formatDuration(total)}</span><div class="rate-btns"><button class="rate-btn active" onclick="setPlaybackRate(1,this)">x1</button><button class="rate-btn" onclick="setPlaybackRate(2,this)">x2</button><button class="rate-btn" onclick="setPlaybackRate(4,this)">x4</button></div></div><audio id="continuousAudio" preload="none"></audio><div class="progress-bar loading" onclick="onAudioProgressClick(event)" role="slider" tabindex="0" aria-label="Seek"><div id="waveformBg" class="waveform-bg"></div><div id="audioLoadProgress" class="load-fill"></div><div id="audioProgress" class="progress-fill"></div></div><div id="segmentsRow" class="segments-row"></div><div class="audio-note muted">Audio and waveform load only after this button. Segments preload sequentially after segment 1 is ready.</div></div></div>`;}
 function initAudioPlayers(){continuousPlayer=null; const root=document.querySelector('.continuous-player'); if(!root)return; continuousPlayer={root,meetCode:root.dataset.meetCode,segments:[],index:0,rate:1,loaded:new Set(),preloading:false,audio:null};}
@@ -993,5 +1047,5 @@ async function copyText(text,button){await navigator.clipboard.writeText(text); 
 def serve_forever() -> None:
     host = os.getenv("HEALTH_HOST", "0.0.0.0")
     port = int(os.getenv("HEALTH_PORT", "8080"))
-    server = ThreadingHTTPServer((host, port), AdminHandler)
+    server = AdminHTTPServer((host, port), AdminHandler)
     server.serve_forever()

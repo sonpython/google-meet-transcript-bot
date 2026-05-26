@@ -111,9 +111,10 @@ See `.env.example` for the full runtime configuration.
 2. SQLite stores meeting state and APScheduler schedules the bot to join about 60 seconds before start.
 3. Playwright launches Chromium with encrypted bot storage state and joins Meet transparently as `BOT_DISPLAY_NAME`.
 4. FFmpeg records the configured Pulse/PipeWire monitor source to an Opus file.
-5. Gemini pipeline chunks audio into 14-minute mono 16kHz MP3 segments, retries across `gemini-2.5-pro`, `gemini-2.5-flash`, and `gemini-2.5-flash-lite`, rejects repeated-line hallucination loops, then writes transcript, summary, and combined notes.
-6. Telegram sends an inline TL;DR plus the full notes markdown document when Telegram settings are configured.
-7. Startup validation and randomized daily health checks verify token, storage state, Gemini, and Telegram availability.
+5. While recording, Playwright captures the visible Meet viewport every 5 minutes by default under `/data/screenshots/<meet-code>/`, so screen shares and presentations are preserved when Meet puts them on the main stage.
+6. Gemini pipeline chunks audio into 14-minute mono 16kHz MP3 segments, retries across `gemini-2.5-pro`, `gemini-2.5-flash`, and `gemini-2.5-flash-lite`, rejects repeated-line hallucination loops, then writes transcript, summary, and combined notes.
+7. Telegram sends an inline TL;DR plus the full notes markdown document when Telegram settings are configured.
+8. Startup validation and randomized daily health checks verify token, storage state, Gemini, and Telegram availability.
 
 ## Deployment Notes
 

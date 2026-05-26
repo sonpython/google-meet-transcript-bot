@@ -11,6 +11,9 @@ class FakePage:
     async def goto(self, url: str, wait_until: str, timeout: int) -> None:
         self.visited_url = url
 
+    def locator(self, selector: str):
+        raise RuntimeError("no DOM in fake page")
+
 
 class FakeContext:
     async def storage_state(self) -> dict:
@@ -59,6 +62,18 @@ async def test_keepalive_saves_refreshed_state_when_session_is_valid() -> None:
 @pytest.mark.anyio
 async def test_keepalive_does_not_save_when_session_is_signed_out_without_password() -> None:
     factory = FakeBrowserFactory("https://accounts.google.com/v3/signin/accountchooser")
+    store = FakeStorageStore()
+
+    ok = await BotSessionKeepAlive(factory, store, "bot@example.com").run()
+
+    assert ok is False
+    assert store.saved is None
+    assert factory.session.closed is True
+
+
+@pytest.mark.anyio
+async def test_keepalive_treats_public_account_page_as_signed_out() -> None:
+    factory = FakeBrowserFactory("https://www.google.com/account/about/?hl=vi")
     store = FakeStorageStore()
 
     ok = await BotSessionKeepAlive(factory, store, "bot@example.com").run()

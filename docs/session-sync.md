@@ -1,5 +1,28 @@
 # Session Sync
 
+## 2026-05-26 — periodic-meeting-screenshots
+
+Status: implemented locally and awaiting deployment.
+
+Code changes:
+
+- Added `src/bot/screenshot_capturer.py`.
+- `MeetingSession` starts screenshot capture only after join success and recording start, then stops it during cleanup before browser close.
+- New settings:
+  - `SCREENSHOT_DIR=/data/screenshots`
+  - `SCREENSHOT_CAPTURE_ENABLED=true`
+  - `SCREENSHOT_INTERVAL_SECONDS=300`
+- Meeting detail API now includes captured screenshots under `files.screenshots`.
+- Admin meeting detail now shows screenshots as a horizontal thumbnail strip. Clicking opens a lightbox with previous/next controls, keyboard arrows, Escape close, and mobile swipe.
+- README runtime flow documents the screenshot capture behavior.
+
+Verification:
+
+- `uv run pytest tests/test_public_api.py tests/test_screenshot_capturer.py tests/test_session_sink_isolation.py` -> 11 passed.
+- `uv run pytest` -> 70 passed.
+- `uv run python -m compileall src tests` -> passed.
+- `uv build` -> passed.
+
 ## 2026-05-20 — concurrent-audio-contamination-fix
 
 Status: implemented, deployed to `192.168.1.120:/opt/meeting-assistant`, and verified.

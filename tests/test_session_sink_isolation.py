@@ -70,6 +70,9 @@ class FakeRecorder:
     def is_running(self):
         return self.running
 
+    def error_tail(self):
+        return ""
+
 
 class FakeJoinResult:
     admitted = True
@@ -83,7 +86,7 @@ class FakeMeetJoiner:
 
 
 class FakeMeetMonitor:
-    def __init__(self, page, should_force_exit):
+    def __init__(self, page, should_force_exit, health_check=None):
         pass
 
     async def run_until_exit(self):
@@ -108,13 +111,29 @@ async def fake_process_result(result):
     return output_dir / "transcript.md", output_dir / "summary.md", output_dir / "notes.md"
 
 
+class FakeScreenshotCapturer:
+    events = []
+
+    def __init__(self, page, screenshot_dir, meet_code, interval_seconds):
+        self.page = page
+        self.screenshot_dir = Path(screenshot_dir)
+        self.meet_code = meet_code
+        self.interval_seconds = interval_seconds
+
+    def start(self):
+        self.events.append(("start", self.meet_code, self.screenshot_dir, self.interval_seconds))
+
+    async def stop(self):
+        self.events.append(("stop", self.meet_code, self.screenshot_dir, self.interval_seconds))
+
+
 @pytest.mark.anyio
 async def test_session_uses_distinct_sink_and_monitor_per_meeting(tmp_path, monkeypatch) -> None:
     created = []
     removed = []
     FakeRecorder.starts = []
 
-    monkeypatch.setattr("src.bot.meeting_session.AudioRecorder", FakeRecorder)
+    monkeypatch.setattr("src.bot.recorder_supervisor.AudioRecorder", FakeRecorder)
     monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", FakeMeetJoiner)
     monkeypatch.setattr("src.bot.meeting_session.MeetMonitor", FakeMeetMonitor)
     monkeypatch.setattr(
@@ -157,7 +176,7 @@ async def test_session_removes_sink_when_join_fails(tmp_path, monkeypatch) -> No
             result.status = "denied"
             return result
 
-    monkeypatch.setattr("src.bot.meeting_session.AudioRecorder", FakeRecorder)
+    monkeypatch.setattr("src.bot.recorder_supervisor.AudioRecorder", FakeRecorder)
     monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", DeniedJoiner)
     monkeypatch.setattr("src.bot.meeting_session.create_session_sink", lambda sink: f"{sink}.monitor")
     monkeypatch.setattr("src.bot.meeting_session.remove_session_sink", lambda sink: removed.append(sink))
@@ -174,6 +193,44 @@ async def test_session_removes_sink_when_join_fails(tmp_path, monkeypatch) -> No
     await session.run(meeting("abc-defg-hij"))
 
     assert removed == ["meet_capture_abc_defg_hij"]
+
+
+@pytest.mark.anyio
+async def test_session_starts_and_stops_screenshot_capture_while_recording(tmp_path, monkeypatch) -> None:
+    FakeScreenshotCapturer.events = []
+
+    class AloneMonitor:
+        def __init__(self, page, should_force_exit, health_check=None):
+            pass
+
+        async def run_until_exit(self):
+            return "alone", ["Host", "Bot"], 30, datetime(2026, 5, 20, tzinfo=UTC)
+
+    monkeypatch.setattr("src.bot.recorder_supervisor.AudioRecorder", FakeRecorder)
+    monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", FakeMeetJoiner)
+    monkeypatch.setattr("src.bot.meeting_session.MeetMonitor", AloneMonitor)
+    monkeypatch.setattr("src.bot.meeting_session.PeriodicScreenshotCapturer", FakeScreenshotCapturer)
+    monkeypatch.setattr("src.bot.meeting_session.create_session_sink", lambda sink: f"{sink}.monitor")
+    monkeypatch.setattr("src.bot.meeting_session.remove_session_sink", lambda sink: None)
+
+    screenshot_dir = tmp_path / "screenshots"
+    session = MeetingSession(
+        FakeRepo(),
+        FakeBrowserFactory(),
+        tmp_path / "audio",
+        "meet_capture.monitor",
+        "Bot",
+        fake_process_result,
+        screenshot_dir=screenshot_dir,
+        screenshot_interval_seconds=300,
+    )
+
+    await session.run(meeting("abc-defg-hij"))
+
+    assert FakeScreenshotCapturer.events == [
+        ("start", "abc-defg-hij", screenshot_dir, 300),
+        ("stop", "abc-defg-hij", screenshot_dir, 300),
+    ]
 
 
 @pytest.mark.anyio
@@ -197,7 +254,7 @@ async def test_session_auto_rejoins_after_page_closed(tmp_path, monkeypatch) -> 
     class PageClosedThenAloneMonitor:
         calls = 0
 
-        def __init__(self, page, should_force_exit):
+        def __init__(self, page, should_force_exit, health_check=None):
             pass
 
         async def run_until_exit(self):
@@ -211,7 +268,7 @@ async def test_session_auto_rejoins_after_page_closed(tmp_path, monkeypatch) -> 
         return await fake_process_result(result)
 
     monkeypatch.setattr("src.bot.meeting_session.AUTO_REJOIN_DELAY_SECONDS", 0)
-    monkeypatch.setattr("src.bot.meeting_session.AudioRecorder", UniqueRecorder)
+    monkeypatch.setattr("src.bot.recorder_supervisor.AudioRecorder", UniqueRecorder)
     monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", FakeMeetJoiner)
     monkeypatch.setattr("src.bot.meeting_session.MeetMonitor", PageClosedThenAloneMonitor)
     monkeypatch.setattr("src.bot.meeting_session.create_session_sink", lambda sink: f"{sink}.monitor")
@@ -239,7 +296,7 @@ async def test_session_auto_rejoins_after_page_closed_even_after_calendar_end(tm
     class PageClosedThenAloneMonitor:
         calls = 0
 
-        def __init__(self, page, should_force_exit):
+        def __init__(self, page, should_force_exit, health_check=None):
             pass
 
         async def run_until_exit(self):
@@ -249,7 +306,7 @@ async def test_session_auto_rejoins_after_page_closed_even_after_calendar_end(tm
             return "alone", ["Host", "Bot"], 20, datetime.now(UTC)
 
     monkeypatch.setattr("src.bot.meeting_session.AUTO_REJOIN_DELAY_SECONDS", 0)
-    monkeypatch.setattr("src.bot.meeting_session.AudioRecorder", FakeRecorder)
+    monkeypatch.setattr("src.bot.recorder_supervisor.AudioRecorder", FakeRecorder)
     monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", FakeMeetJoiner)
     monkeypatch.setattr("src.bot.meeting_session.MeetMonitor", PageClosedThenAloneMonitor)
     monkeypatch.setattr("src.bot.meeting_session.create_session_sink", lambda sink: f"{sink}.monitor")
@@ -274,7 +331,7 @@ async def test_session_does_not_process_when_end_is_not_confirmed(tmp_path, monk
     processed = []
 
     class AlwaysPageClosedMonitor:
-        def __init__(self, page, should_force_exit):
+        def __init__(self, page, should_force_exit, health_check=None):
             pass
 
         async def run_until_exit(self):
@@ -285,7 +342,7 @@ async def test_session_does_not_process_when_end_is_not_confirmed(tmp_path, monk
         return await fake_process_result(result)
 
     monkeypatch.setattr("src.bot.meeting_session.MAX_AUTO_REJOINS", 0)
-    monkeypatch.setattr("src.bot.meeting_session.AudioRecorder", FakeRecorder)
+    monkeypatch.setattr("src.bot.recorder_supervisor.AudioRecorder", FakeRecorder)
     monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", FakeMeetJoiner)
     monkeypatch.setattr("src.bot.meeting_session.MeetMonitor", AlwaysPageClosedMonitor)
     monkeypatch.setattr("src.bot.meeting_session.create_session_sink", lambda sink: f"{sink}.monitor")

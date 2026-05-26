@@ -14,6 +14,23 @@ Google Meet transcript bot for Workspace meetings.
 
 ## Latest Session
 
+### 2026-05-26 — periodic-meeting-screenshots
+
+Actor: Codex.
+
+Done:
+
+- Added configurable Playwright viewport screenshot capture during admitted meeting recording.
+- Default cadence: immediate first capture, then every 300 seconds.
+- Default path: `/data/screenshots/<meet-code>/<meet-code>-YYYYMMDDTHHMMSSZ.png`.
+- Exposed screenshot metadata in meeting detail API under `files.screenshots`.
+- Added admin screenshot gallery with horizontal thumbnails and lightbox navigation.
+- Added focused tests for screenshot capture, MeetingSession lifecycle integration, and API metadata.
+
+Notes:
+
+- Capture uses the visible Meet viewport. This prioritizes presentations/screen shares when Google Meet places them on the main stage.
+
 ### 2026-05-20 — concurrent-audio-contamination-fix
 
 Actor: Codex.

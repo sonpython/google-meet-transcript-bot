@@ -15,6 +15,7 @@ def _settings(tmp_path: Path) -> Settings:
         audio_dir=tmp_path / "audio",
         output_dir=tmp_path / "output",
         debug_dir=tmp_path / "debug",
+        screenshot_dir=tmp_path / "screenshots",
         user_email="owner@example.com",
         admin_token="test-admin-token",
     )
@@ -40,6 +41,9 @@ def _seed(tmp_path: Path, monkeypatch):
     minutes = settings.output_dir / "meeting-minutes-weekly-sync.md"
     transcript.write_text("Transcript body", encoding="utf-8")
     minutes.write_text("Meeting minutes body", encoding="utf-8")
+    screenshot_dir = settings.screenshot_dir / "abc-defg-hij"
+    screenshot_dir.mkdir(parents=True)
+    (screenshot_dir / "abc-defg-hij-20260520T000000Z.png").write_bytes(b"png")
     repo = MeetingsRepo(connect(settings.db_path))
     repo.upsert(_event("abc-defg-hij", "Weekly Sync", 9))
     repo.upsert(_event("xyz-abcd-efg", "Sales Review", 11))
@@ -72,6 +76,8 @@ def test_api_meeting_detail_includes_transcript_and_minutes(tmp_path: Path, monk
     assert meeting["transcript"] == "Transcript body"
     assert meeting["meeting_minutes"] == "Meeting minutes body"
     assert meeting["files"]["transcript"]["exists"] is True
+    assert meeting["files"]["screenshots"][0]["exists"] is True
+    assert meeting["files"]["screenshots"][0]["index"] == 0
 
 
 def test_api_transcripts_can_find_by_meeting_code(tmp_path: Path, monkeypatch) -> None:

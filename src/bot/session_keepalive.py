@@ -35,10 +35,13 @@ class BotSessionKeepAlive:
         session = await self.browser_factory.launch_with_state()
         try:
             await session.page.goto(self.url, wait_until="domcontentloaded", timeout=30_000)
-            if self._is_signed_out(session.page.url):
+            if await self._is_signed_out(session.page):
                 self.log.warning("bot_session_keepalive_signed_out", url=session.page.url)
                 if not await self._reauth(session.page):
                     return False
+            if await self._is_signed_out(session.page):
+                self.log.warning("bot_session_keepalive_still_signed_out", url=session.page.url)
+                return False
             self.storage_state_store.save(await session.context.storage_state())
             self.log.info("bot_session_keepalive_ok", url=session.page.url)
             return True
@@ -48,8 +51,18 @@ class BotSessionKeepAlive:
         finally:
             await session.close()
 
-    def _is_signed_out(self, url: str) -> bool:
-        return "accounts.google.com" in url
+    async def _is_signed_out(self, page) -> bool:
+        url = getattr(page, "url", "")
+        if "accounts.google.com" in url:
+            return True
+        if "myaccount.google.com" not in url:
+            return True
+        try:
+            body = await page.locator("body").inner_text(timeout=1_000)
+        except Exception:
+            return False
+        normalized = " ".join(body.lower().split())
+        return "sign in" in normalized or "đăng nhập" in normalized
 
     async def _reauth(self, page) -> bool:
         if not self.bot_password:
@@ -78,6 +91,20 @@ class BotSessionKeepAlive:
         if await account_tile.count():
             await account_tile.first.click()
             return
+        await page.goto(
+            "https://accounts.google.com/ServiceLogin"
+            "?service=accountsettings&continue=https%3A%2F%2Fmyaccount.google.com%2F",
+            wait_until="domcontentloaded",
+            timeout=30_000,
+        )
+        account_tile = page.get_by_text(self.bot_email, exact=False)
+        if await account_tile.count():
+            await account_tile.first.click()
+            return
+        email_input = page.locator('input[type="email"], #identifierId').first
+        await email_input.wait_for(state="visible", timeout=20_000)
+        await email_input.fill(self.bot_email)
+        await self._click_next(page)
 
     async def _enter_password(self, page) -> None:
         password_input = page.locator('input[type="password"]').first

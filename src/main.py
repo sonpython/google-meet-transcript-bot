@@ -172,6 +172,9 @@ async def main() -> None:
         result_processor,
         settings.auto_purge_audio,
         lambda: repo.get_audio_retention_days(settings.audio_retention_days),
+        settings.screenshot_dir,
+        settings.screenshot_interval_seconds,
+        settings.screenshot_capture_enabled,
     )
     runner = JobRunner(repo, meeting_session.run, settings.max_concurrent_meetings)
     runner.start()

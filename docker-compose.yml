@@ -3,6 +3,7 @@ services:
     build: .
     image: meeting-assistant:latest
     container_name: meeting-assistant
+    init: true
     restart: unless-stopped
     env_file:
       - .env

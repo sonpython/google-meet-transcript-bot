@@ -35,7 +35,13 @@ class BrowserSessionFactory:
             env["PULSE_SINK"] = pulse_sink
         browser = await playwright.chromium.launch(
             headless=self.headless,
-            args=["--disable-blink-features=AutomationControlled", "--use-fake-ui-for-media-stream"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-crash-reporter",
+                "--disable-crashpad",
+                "--disable-dev-shm-usage",
+                "--use-fake-ui-for-media-stream",
+            ],
             env=env,
         )
         state = self.state_store.load()

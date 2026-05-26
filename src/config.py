@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     max_concurrent_meetings: int = Field(default=3, ge=1, le=10)
     output_dir: Path = Field(default=Path("/data/output"))
     debug_dir: Path = Field(default=Path("/data/debug"))
+    screenshot_dir: Path = Field(default=Path("/data/screenshots"))
+    screenshot_capture_enabled: bool = Field(default=True)
+    screenshot_interval_seconds: int = Field(default=300, ge=30)
 
     bot_email: str = Field(default="bot@your-domain.com")
     bot_password: str | None = Field(default=None)
@@ -31,7 +34,7 @@ class Settings(BaseSettings):
     storage_state_path: Path = Field(default=Path("/data/tokens/storage-state.fernet"))
     storage_passphrase: str | None = Field(default=None)
     bot_session_keepalive_enabled: bool = Field(default=True)
-    bot_session_keepalive_interval_seconds: int = Field(default=60, ge=30)
+    bot_session_keepalive_interval_seconds: int = Field(default=900, ge=60)
     test_meet_code: str | None = Field(default=None)
 
     gemini_api_key: str | None = Field(default=None)
