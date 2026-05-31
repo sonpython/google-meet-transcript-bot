@@ -36,9 +36,9 @@ class JobRunner:
             return
         self._schedule(meeting, f"meet:{meeting.meet_code}")
 
-    def schedule_manual_join(self, meeting: MeetingEvent, command_id: int) -> None:
+    def schedule_manual_join(self, meeting: MeetingEvent, command_id: int, immediate: bool = True) -> None:
         self.repo.mark_status(meeting.meet_code, "scheduled", None)
-        self._schedule(meeting, f"rejoin:{meeting.meet_code}:{command_id}", immediate=True)
+        self._schedule(meeting, f"rejoin:{meeting.meet_code}:{command_id}", immediate=immediate)
 
     def _schedule(self, meeting: MeetingEvent, job_id: str, immediate: bool = False) -> None:
         run_date = meeting.start_utc - timedelta(seconds=60)
@@ -56,6 +56,8 @@ class JobRunner:
 
     async def _run_meeting_capped(self, meeting: MeetingEvent) -> None:
         if meeting.meet_code in self._running_meet_codes:
+            return
+        if not self.repo.get(meeting.meet_code):
             return
         self._running_meet_codes.add(meeting.meet_code)
         try:

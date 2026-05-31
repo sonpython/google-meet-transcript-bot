@@ -15,10 +15,10 @@ from src.state.meetings_repo import MeetingsRepo
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Regenerate transcript for a meeting, optionally generating AI documents.")
+    parser = argparse.ArgumentParser(description="Regenerate transcript for a meeting, optionally generating meeting minutes.")
     parser.add_argument("--meet-code", required=True)
     parser.add_argument("--clear-meta", action="store_true", help="Remove cached .opus.meta.json files for this meeting.")
-    parser.add_argument("--generate-documents", action="store_true", help="Also generate summary, minutes, and notes.")
+    parser.add_argument("--generate-documents", action="store_true", help="Also generate meeting minutes.")
     return parser.parse_args()
 
 
@@ -74,14 +74,14 @@ async def main() -> None:
         append=False,
         generate_documents=args.generate_documents,
     )
-    if len(output_paths) == 4:
-        transcript_path, summary_path, minutes_path, notes_path = output_paths
+    if len(output_paths) == 2:
+        transcript_path, minutes_path = output_paths
         repo.mark_delivered(
             meet_code,
-            str(notes_path),
+            str(transcript_path),
             transcript_path=str(transcript_path),
-            summary_path=str(summary_path),
             minutes_path=str(minutes_path),
+            summary_path=None,
         )
     else:
         transcript_path = output_paths[0]

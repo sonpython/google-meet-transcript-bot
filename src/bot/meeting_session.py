@@ -1,11 +1,13 @@
 import asyncio
 import os
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import structlog
 
+from src.bot.audio_tail_trimmer import trim_trailing_silence_after_participants_left
 from src.bot.meet_joiner import MeetJoiner
 from src.bot.meet_monitor import MeetMonitor
 from src.bot.recorder_supervisor import RecorderSupervisor
@@ -59,6 +61,7 @@ class MeetingSession:
         all_participants: list[str] = []
         final_reason = "unknown"
         actual_end = meeting.start_utc
+        final_trim_keep_seconds: int | None = None
         for attempt in range(MAX_AUTO_REJOINS + 1):
             session = None
             recorder = None
@@ -78,7 +81,8 @@ class MeetingSession:
                     attempt=attempt + 1,
                 )
                 session = await self.browser_factory.launch_with_state(pulse_sink=sink_name)
-                join_result = await MeetJoiner().join(session.page, meeting.meet_code, self.display_name)
+                joiner = MeetJoiner()
+                join_result = await joiner.join(session.page, meeting.meet_code, self.display_name)
                 if not join_result.admitted:
                     error = join_result.error_msg or join_result.status
                     if join_result.status in NON_RETRYABLE_JOIN_STATUSES:
@@ -89,10 +93,12 @@ class MeetingSession:
                         continue
                     self.repo.mark_status(meeting.meet_code, "failed", error)
                     return
+                meeting = await self._refresh_manual_title(meeting, joiner, session.page)
                 recorder = RecorderSupervisor(self.audio_dir, self.audio_source, meeting.meet_code, monitor_source)
                 first_audio_path = recorder.start()
                 self.repo.mark_status(meeting.meet_code, "recording", audio_path=str(first_audio_path))
                 screenshot_capturer = self._start_screenshot_capture(session.page, meeting.meet_code)
+                monitor_started_at = datetime.now(UTC)
                 reason, participants, duration, actual_end = await MeetMonitor(
                     session.page,
                     should_force_exit=lambda: self._claim_force_out(meeting.meet_code),
@@ -103,6 +109,9 @@ class MeetingSession:
                 total_duration += sum(recorder.durations) or duration
                 all_participants.extend(str(item) for item in participants)
                 final_reason = reason
+                final_trim_keep_seconds = (
+                    max(1, int((actual_end - monitor_started_at).total_seconds())) if reason == "alone" else None
+                )
                 if reason == "no_one_joined":
                     self.repo.mark_status(
                         meeting.meet_code,
@@ -174,6 +183,7 @@ class MeetingSession:
             final_reason,
             tuple(dict.fromkeys(all_participants)),
             actual_end,
+            final_trim_keep_seconds,
         )
 
     def _claim_force_out(self, meet_code: str) -> bool:
@@ -182,6 +192,16 @@ class MeetingSession:
             return False
         self.repo.complete_command(command["id"], "done")
         return True
+
+    async def _refresh_manual_title(self, meeting: MeetingEvent, joiner: MeetJoiner, page) -> MeetingEvent:
+        if not _should_refresh_title(meeting):
+            return meeting
+        title = await joiner.meeting_title(page, meeting.title)
+        if not title or title == meeting.title:
+            return meeting
+        self.repo.update_title(meeting.meet_code, title)
+        self.log.info("meeting_session_title_refreshed", meet_code=meeting.meet_code, title=title)
+        return replace(meeting, title=title)
 
     def _start_screenshot_capture(self, page, meet_code: str) -> PeriodicScreenshotCapturer | None:
         if not self.screenshot_capture_enabled or not self.screenshot_dir:
@@ -221,6 +241,7 @@ class MeetingSession:
         final_reason: str,
         participant_names: tuple[str, ...],
         actual_end: datetime,
+        final_trim_keep_seconds: int | None,
     ) -> None:
         task = asyncio.create_task(
             self._process_recordings(
@@ -231,6 +252,7 @@ class MeetingSession:
                 final_reason,
                 participant_names,
                 actual_end,
+                final_trim_keep_seconds,
             )
         )
         self._processing_tasks.add(task)
@@ -245,6 +267,7 @@ class MeetingSession:
         final_reason: str,
         participant_names: tuple[str, ...],
         actual_end: datetime,
+        final_trim_keep_seconds: int | None,
     ) -> None:
         lock = self._processing_locks.setdefault(meeting.meet_code, asyncio.Lock())
         async with lock:
@@ -257,17 +280,45 @@ class MeetingSession:
                 results = []
                 for index, path in enumerate(recorded_paths, start=1):
                     duration = recorded_durations[index - 1] if index - 1 < len(recorded_durations) else 0
+                    processing_path = path
+                    processing_duration = duration
+                    if final_reason == "alone" and index == len(recorded_paths) and final_trim_keep_seconds is not None:
+                        trim = trim_trailing_silence_after_participants_left(
+                            path,
+                            final_trim_keep_seconds,
+                            duration,
+                        )
+                        processing_path = trim.audio_path
+                        processing_duration = trim.duration_seconds
+                        if trim.trimmed:
+                            self.log.info(
+                                "meeting_session_trimmed_alone_tail",
+                                meet_code=meeting.meet_code,
+                                original_audio_path=str(path),
+                                trimmed_audio_path=str(trim.audio_path),
+                                original_duration_sec=duration,
+                                trimmed_duration_sec=trim.duration_seconds,
+                            )
+                        else:
+                            self.log.info(
+                                "meeting_session_kept_alone_tail",
+                                meet_code=meeting.meet_code,
+                                audio_path=str(path),
+                                reason=trim.reason,
+                                duration_sec=duration,
+                                keep_seconds=final_trim_keep_seconds,
+                    )
                     results.append(
                         MeetingResult(
-                        meeting.meet_code,
-                        path,
-                        duration,
-                        final_reason,
-                        participant_names,
-                        meeting.title,
-                        actual_end,
-                        admin_instruction,
-                    )
+                            meeting.meet_code,
+                            processing_path,
+                            processing_duration,
+                            final_reason,
+                            participant_names,
+                            meeting.title,
+                            actual_end,
+                            admin_instruction,
+                        )
                     )
                 if hasattr(self.process_result, "process_many"):
                     async def on_progress(stage: str, batch: int, progress_total: int) -> None:
@@ -351,9 +402,19 @@ def _normalize_output_paths(output_paths) -> tuple[Path, dict[str, str]]:
                 "summary_path": str(summary_path),
                 "minutes_path": str(minutes_path),
             }
+        if len(output_paths) == 2:
+            transcript_path, minutes_path = output_paths
+            return transcript_path, {
+                "transcript_path": str(transcript_path),
+                "minutes_path": str(minutes_path),
+            }
         transcript_path, summary_path, notes_path = output_paths
         return notes_path, {
             "transcript_path": str(transcript_path),
             "summary_path": str(summary_path),
         }
     return output_paths, {}
+
+
+def _should_refresh_title(meeting: MeetingEvent) -> bool:
+    return meeting.event_id.startswith("manual:") or meeting.title.startswith("Manual Meet ")

@@ -1,5 +1,133 @@
 # Session Sync
 
+## 2026-05-29 — admin-delete-meeting-and-logout
+
+Status: implemented, deployed to `192.168.1.120:/opt/meeting-assistant`, and verified healthy.
+
+Code changes:
+
+- Added `MeetingsRepo.delete_meeting()`.
+- Added `POST /admin/api/meetings/{meet_code}/delete`.
+- Admin detail now shows a Delete button unless the meeting is currently `joining` or `recording`.
+- Delete removes the admin history record and related admin commands but keeps existing files on disk.
+- `JobRunner` checks the DB row before executing a scheduled job, so deleted future meetings do not still run.
+- Settings page now includes a Logout form posting to `/admin/logout`; the server clears the `admin_token` cookie.
+
+Verification:
+
+- `uv run pytest` -> 86 passed.
+- `uv run python -m compileall src tests` -> passed.
+- Docker deploy: `docker compose up -d --build meeting-assistant` on `192.168.1.120`.
+- Runtime check: container `meeting-assistant` healthy; `/status` reports `state=running`.
+
+## 2026-05-29 — manual-join-scheduled-choice-and-meet-popups
+
+Status: implemented, deployed to `192.168.1.120:/opt/meeting-assistant`, and verified healthy.
+
+Code changes:
+
+- `POST /admin/api/manual-join` accepts `mode=join_now|scheduled`.
+- If a manually entered Meet code resolves to a future calendar event and no mode is provided, the API returns `needs_schedule_choice`.
+- Admin UI shows Join now and Join on scheduled time options for that case.
+- Added `join_scheduled` admin command and scheduler handling.
+- Manual placeholder meeting titles are refreshed from the live Meet page after admission.
+- Added `src/bot/meet_popups.py` and call it before join, during admission polling, and before each screenshot capture to dismiss Google Meet/Gemini/AI prompt dialogs.
+
+Verification:
+
+- `uv run pytest` -> 83 passed.
+- `uv run python -m compileall src tests` -> passed.
+- Docker deploy: `docker compose up -d --build meeting-assistant` on `192.168.1.120`.
+- Runtime check: container `meeting-assistant` healthy; `/status` reports `state=running`.
+
+## 2026-05-29 — meeting-minutes-report-template
+
+Status: implemented, deployed to `192.168.1.120:/opt/meeting-assistant`, and verified healthy.
+
+Code changes:
+
+- Added `src/gemini/report_template.py` for shared meeting-minutes report title/marker formatting.
+- Changed the generated meeting-minutes marker from:
+  `## Generated ...` plus `- Meet code: ...`
+  to:
+  `## Generated ...` plus `Meet code: ...`.
+- Existing reports are not rewritten automatically; newly generated minutes use the new format.
+
+Verification:
+
+- `uv run pytest` -> 79 passed.
+- `uv run python -m compileall src tests` -> passed.
+- Docker deploy: `docker compose up -d --build meeting-assistant` on `192.168.1.120`.
+- Runtime check: container `meeting-assistant` healthy; `/status` reports `state=running`.
+
+## 2026-05-29 — regenerate-transcript-stuck-recovery
+
+Status: implemented, deployed to `192.168.1.120:/opt/meeting-assistant`, and verified healthy.
+
+Incident notes:
+
+- Latest meeting `ojo-mkpi-hza` showed `transcribing 1/1` after the user clicked transcript regeneration.
+- DB showed `admin_commands.id=37` and the meeting processing state were both `running`, but the service had restarted after that timestamp, so the command was stale.
+- After resetting the command to `pending`, the worker picked it up, but Gemini transcription did not complete and the retained transcript still showed `503 UNAVAILABLE` high-demand failures.
+- The command and meeting were marked `failed` with an explicit retry-later error so admin no longer spins indefinitely.
+
+Code changes:
+
+- Added `_recover_interrupted_admin_commands()` in `src/main.py`.
+- On startup, any `admin_commands.status='running'` is marked failed as `interrupted by service restart`.
+- For `regenerate` and `regenerate_transcript`, the related meeting processing state is also marked failed so the admin UI leaves the running state.
+- Added regression coverage in `tests/test_admin_manual_join.py`.
+
+Verification:
+
+- `uv run pytest` -> 79 passed.
+- `uv run python -m compileall src tests` -> passed.
+- Docker deploy: `docker compose up -d --build meeting-assistant` on `192.168.1.120`.
+- Runtime check: container `meeting-assistant` healthy; `/status` reports `state=running`.
+
+## 2026-05-29 — trim-alone-silent-tail
+
+Status: implemented, deployed to `192.168.1.120:/opt/meeting-assistant`, and verified healthy.
+
+Code changes:
+
+- Added `src/bot/audio_tail_trimmer.py`.
+- Meeting processing now handles `alone` exits by checking the audio tail after the participant-leave timestamp.
+- Tail validation uses FFmpeg `volumedetect`; if max volume stays under the silence threshold, it writes `*-trimmed.opus` and sends that to Gemini.
+- If tail is not silent, too short, or trimming fails, processing keeps the original audio.
+- Admin audio metadata now filters `*-trimmed.opus` out as a duplicate segment and uses it as the default replacement for the matching original segment.
+- Admin audio player shows a small dropdown beside Load audio when a trimmed segment exists; the dropdown reloads audio metadata/playback with `mode=full` to include the original silent tail.
+- Added tests for silent-tail trim/keep behavior and MeetingSession using the trimmed audio path.
+
+Verification:
+
+- `uv run pytest` -> 78 passed.
+- `uv run python -m compileall src tests` -> passed.
+- Docker deploy: `docker compose up -d --build meeting-assistant` on `192.168.1.120`.
+- Runtime check: container `meeting-assistant` healthy; `/status` reports `state=running`.
+
+## 2026-05-29 — transcript-regeneration-admin-fix
+
+Status: implemented, deployed to `192.168.1.120:/opt/meeting-assistant`, and verified healthy.
+
+Code changes:
+
+- Added admin transcript regeneration:
+  - API: `POST /admin/api/meetings/{meet_code}/regenerate-transcript`
+  - DB command: `regenerate_transcript`
+  - Worker path forces re-transcription from retained `.opus` audio and clears stale minutes/summary references.
+- Changed existing `regenerate`/Generate minutes path so it only generates `meeting-minutes-*.md` from the current transcript. It no longer calls summary generation or writes combined notes.
+- Admin detail now renders only Meeting Minutes and Transcript document blocks.
+- Transcript block has a regenerate button next to copy.
+- Screenshots section now shows an explicit empty-state hint if no screenshot files are discoverable under configured `SCREENSHOT_DIR`.
+
+Verification:
+
+- `uv run pytest` -> 73 passed.
+- `uv run python -m compileall src tests` -> passed.
+- Docker deploy: `docker compose up -d --build meeting-assistant` on `192.168.1.120`.
+- Runtime check: container `meeting-assistant` healthy; `/status` reports `state=running`.
+
 ## 2026-05-26 — periodic-meeting-screenshots
 
 Status: implemented locally and awaiting deployment.

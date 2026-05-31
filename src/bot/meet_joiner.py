@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from src.bot import meet_selectors as sel
 from src.bot.join_result import JoinResult
+from src.bot.meet_popups import dismiss_meet_popups
 
 
 class MeetJoiner:
@@ -12,8 +13,10 @@ class MeetJoiner:
             signed_out = await self._signed_out(page)
             if signed_out:
                 return JoinResult("signed_out", error_msg="bot Google session signed out; re-auth required")
+            await dismiss_meet_popups(page)
             await self._fill_name_if_needed(page, display_name)
             await self._ensure_media_off(page)
+            await dismiss_meet_popups(page)
             clicked = await self._wait_and_click_join_button(
                 page,
                 [sel.JOIN_HERE_TOO_BTN, sel.JOIN_NOW_BTN, sel.ASK_TO_JOIN_BTN, sel.SWITCH_HERE_BTN],
@@ -71,6 +74,7 @@ class MeetJoiner:
     ) -> bool:
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
+            await dismiss_meet_popups(page)
             if await self._click_first_visible(page, selectors):
                 return True
             await asyncio.sleep(poll_seconds)
@@ -79,6 +83,7 @@ class MeetJoiner:
     async def _wait_for_outcome(self, page, timeout: int) -> JoinResult:
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
+            await dismiss_meet_popups(page)
             if await self._click_visible(page, sel.CONSENT_JOIN_NOW_BTN):
                 await asyncio.sleep(1)
                 continue
@@ -105,3 +110,60 @@ class MeetJoiner:
             except Exception:
                 continue
         return False
+
+    async def meeting_title(self, page, fallback: str) -> str:
+        candidates = []
+        try:
+            candidates.append(await page.title())
+        except Exception:
+            pass
+        candidates.extend(
+            await self._visible_text_candidates(
+                page,
+                (
+                    '[data-meeting-title]',
+                    '[aria-label*="Meeting title" i]',
+                    '[aria-label*="Tên cuộc họp" i]',
+                    'div[role="heading"]',
+                    "h1",
+                ),
+            )
+        )
+        for candidate in candidates:
+            title = _clean_meeting_title(candidate, fallback)
+            if title:
+                return title
+        return fallback
+
+    async def _visible_text_candidates(self, page, selectors: tuple[str, ...]) -> list[str]:
+        texts = []
+        for selector in selectors:
+            locator = page.locator(selector)
+            for index in range(await _safe_count(locator)):
+                node = locator.nth(index)
+                try:
+                    if await node.is_visible():
+                        texts.append(await node.inner_text(timeout=500))
+                except Exception:
+                    continue
+        return texts
+
+
+async def _safe_count(locator) -> int:
+    try:
+        return await locator.count()
+    except Exception:
+        return 0
+
+
+def _clean_meeting_title(value: str, fallback: str) -> str:
+    title = " ".join(str(value or "").replace("\n", " ").split())
+    for suffix in (" - Google Meet", " – Google Meet", " | Google Meet"):
+        if title.endswith(suffix):
+            title = title[: -len(suffix)].strip()
+    rejected = {fallback.strip().lower(), "google meet", "meet", ""}
+    if title.lower() in rejected:
+        return ""
+    if len(title) > 120:
+        return ""
+    return title

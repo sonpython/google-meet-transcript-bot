@@ -63,16 +63,7 @@ def _build_result_processor(settings):
         output_paths = await pipeline().process(result, generate_documents=generate_documents)
         if not generate_documents:
             return output_paths
-        transcript_path, summary_path, minutes_path, notes_path = output_paths
-        if settings.delivery_enabled and settings.discord_bot_token and settings.discord_channel_id:
-            discord = DiscordDelivery(DiscordClient(settings.discord_bot_token, settings.discord_channel_id))
-            summary = summary_path.read_text()
-            await discord.deliver(result, notes_path, summary)
-        elif settings.delivery_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
-            telegram = TelegramDelivery(TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id))
-            summary = summary_path.read_text()
-            await telegram.deliver(result, notes_path, summary)
-        return transcript_path, summary_path, minutes_path, notes_path
+        return output_paths
 
     async def process_many(
         results: tuple[MeetingResult, ...],
@@ -88,20 +79,10 @@ def _build_result_processor(settings):
         )
         if not generate_documents:
             return output_paths
-        transcript_path, summary_path, minutes_path, notes_path = output_paths
-        result = results[-1]
-        if settings.delivery_enabled and settings.discord_bot_token and settings.discord_channel_id:
-            discord = DiscordDelivery(DiscordClient(settings.discord_bot_token, settings.discord_channel_id))
-            summary = summary_path.read_text()
-            await discord.deliver(result, notes_path, summary)
-        elif settings.delivery_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
-            telegram = TelegramDelivery(TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id))
-            summary = summary_path.read_text()
-            await telegram.deliver(result, notes_path, summary)
         return output_paths
 
-    async def generate_documents(transcript: str, title: str, meet_code: str, admin_instruction: str, on_progress=None):
-        return await pipeline().generate_documents(
+    async def generate_minutes(transcript: str, title: str, meet_code: str, admin_instruction: str, on_progress=None):
+        return await pipeline().generate_minutes(
             transcript,
             title,
             meet_code,
@@ -111,7 +92,7 @@ def _build_result_processor(settings):
         )
 
     process.process_many = process_many
-    process.generate_documents = generate_documents
+    process.generate_minutes = generate_minutes
     return process
 
 
@@ -163,6 +144,7 @@ async def main() -> None:
     browser_factory = BrowserSessionFactory(storage_store, headless=settings.bot_headless)
     keepalive = BotSessionKeepAlive(browser_factory, storage_store, settings.bot_email, settings.bot_password)
     result_processor = _build_result_processor(settings)
+    _recover_interrupted_admin_commands(repo)
     meeting_session = MeetingSession(
         repo,
         browser_factory,
@@ -221,6 +203,23 @@ async def main() -> None:
     log.info("meeting_assistant_stopping")
 
 
+def _recover_interrupted_admin_commands(repo: MeetingsRepo) -> None:
+    rows = list(
+        repo.conn.execute(
+            """
+            SELECT id, command, meet_code
+            FROM admin_commands
+            WHERE status='running'
+            """
+        ).fetchall()
+    )
+    for row in rows:
+        error = "interrupted by service restart"
+        repo.complete_command(row["id"], "failed", error)
+        if row["command"] in {"regenerate", "regenerate_transcript"}:
+            repo.mark_processing(row["meet_code"], "failed", 0, 0, error, stage="failed")
+
+
 async def _run_admin_command_loop(settings, repo: MeetingsRepo, runner: JobRunner, result_processor) -> None:
     regenerate_tasks: set[asyncio.Task] = set()
     while True:
@@ -230,16 +229,17 @@ async def _run_admin_command_loop(settings, repo: MeetingsRepo, runner: JobRunne
                 if not row:
                     repo.complete_command(command["id"], "failed", "meeting not found")
                     continue
+                start_utc = _parse_dt(row["scheduled_start_utc"]) or datetime.now(UTC)
                 meeting = MeetingEvent(
                     meet_code=row["meet_code"],
                     event_id=row["event_id"],
-                    start_utc=datetime.now(UTC),
-                    end_utc=None,
+                    start_utc=start_utc if command["command"] == "join_scheduled" else datetime.now(UTC),
+                    end_utc=_parse_dt(row["scheduled_end_utc"]),
                     title=row["title"],
                     organizer=None,
                     attendees=(),
                 )
-                runner.schedule_manual_join(meeting, command["id"])
+                runner.schedule_manual_join(meeting, command["id"], immediate=command["command"] != "join_scheduled")
                 repo.complete_command(command["id"])
             except Exception as exc:
                 repo.complete_command(command["id"], "failed", str(exc))
@@ -258,18 +258,20 @@ async def _run_regenerate_command(settings, command, result_processor) -> None:
         if not row:
             repo.complete_command(command["id"], "failed", "meeting not found")
             return
-        if not str(row["admin_instruction"] or "").strip():
+        command_name = command["command"]
+        is_transcript_regen = command_name == "regenerate_transcript"
+        if not is_transcript_regen and not str(row["admin_instruction"] or "").strip():
             repo.complete_command(command["id"], "failed", "admin instruction is required")
             repo.mark_processing(meet_code, "failed", 0, 0, "admin instruction is required", stage="failed")
             return
-        repo.mark_processing(meet_code, "running", 0, 3, stage="preparing")
+        repo.mark_processing(meet_code, "running", 0, 1, stage="preparing")
         participants = _participants(row)
         instruction = str(row["admin_instruction"] or "")
         async def on_progress(stage: str, batch: int, total: int) -> None:
             repo.mark_processing(meet_code, "running", batch, total, stage=stage)
 
         transcript_path, transcript = _existing_transcript(settings.output_dir, row)
-        if not transcript:
+        if is_transcript_regen or not transcript:
             audio_paths = _audio_paths(settings.audio_dir, meet_code)
             if not audio_paths:
                 repo.complete_command(command["id"], "failed", "no transcript or audio files found")
@@ -297,20 +299,31 @@ async def _run_regenerate_command(settings, command, result_processor) -> None:
             )
             transcript_path = transcript_only[0]
             transcript = transcript_path.read_text(encoding="utf-8")
-        summary_path, minutes_path, notes_path = await result_processor.generate_documents(
+        if is_transcript_regen:
+            repo.mark_processing(meet_code, "done", 1, 1, stage="done")
+            repo.mark_delivered(
+                meet_code,
+                str(transcript_path),
+                transcript_path=str(transcript_path),
+                summary_path=None,
+                minutes_path=None,
+            )
+            repo.complete_command(command["id"])
+            return
+        minutes_path = await result_processor.generate_minutes(
             transcript,
             row["title"] or meet_code,
             meet_code,
             instruction,
             on_progress=on_progress,
         )
-        repo.mark_processing(meet_code, "done", 3, 3, stage="done")
+        repo.mark_processing(meet_code, "done", 1, 1, stage="done")
         repo.mark_delivered(
             meet_code,
-            str(notes_path),
+            str(transcript_path),
             transcript_path=str(transcript_path),
-            summary_path=str(summary_path),
             minutes_path=str(minutes_path),
+            summary_path=None,
         )
         repo.complete_command(command["id"])
     except Exception as exc:

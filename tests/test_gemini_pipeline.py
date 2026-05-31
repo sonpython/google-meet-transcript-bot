@@ -106,20 +106,16 @@ def test_pipeline_generates_documents_when_requested(tmp_path: Path) -> None:
         admin_instruction="Write professional minutes.",
     )
 
-    transcript_path, summary_path, minutes_path, notes_path = asyncio.run(
+    transcript_path, minutes_path = asyncio.run(
         pipeline.process(result, generate_documents=True)
     )
 
     assert transcript_path.exists()
-    assert "## Generated " in summary_path.read_text()
-    assert "## TL;DR\nSummary content" in summary_path.read_text()
     assert "## Thông Tin Cuộc Họp\nMinutes content" in minutes_path.read_text()
-    assert len(client.text_calls) == 2
-    assert "# Weekly Sync" in notes_path.read_text()
-    assert "## Meeting Minutes" in notes_path.read_text()
-    assert "- Meet code: abc-defg-hij" in notes_path.read_text()
-    assert "- Duration: 2m 0s" in notes_path.read_text()
-    assert "Exit reason" not in notes_path.read_text()
+    assert len(client.text_calls) == 1
+    assert "## Generated " in minutes_path.read_text()
+    assert "Meet code: abc-defg-hij" in minutes_path.read_text()
+    assert "- Meet code: abc-defg-hij" not in minutes_path.read_text()
 
 
 def test_pipeline_passes_admin_instruction_to_prompts(tmp_path: Path) -> None:
@@ -165,9 +161,8 @@ def test_pipeline_reports_progress_by_stage(tmp_path: Path) -> None:
     assert progress == [
         ("transcribing", 1, 1),
         ("writing_transcript", 1, 1),
-        ("summarizing", 1, 3),
-        ("minutes", 2, 3),
-        ("writing", 3, 3),
+        ("minutes", 1, 1),
+        ("writing", 1, 1),
     ]
 
 

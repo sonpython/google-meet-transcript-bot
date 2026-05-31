@@ -4,6 +4,7 @@ from typing import Awaitable, Callable
 
 from src.gemini.summarizer import Summarizer
 from src.gemini.transcriber import Transcriber
+from src.gemini.report_template import document_marker, document_title
 from src.duration_format import format_duration
 from src.models.meeting_result import MeetingResult
 
@@ -32,7 +33,7 @@ class GeminiPipeline:
         if not generate_documents:
             await _notify(on_progress, "done", len(results), len(results))
             return (transcript_path,)
-        summary_path, minutes_path, notes_path = await self.generate_documents(
+        minutes_path = await self.generate_minutes(
             combined_transcript,
             first.title,
             first.meet_code,
@@ -40,7 +41,7 @@ class GeminiPipeline:
             append=append,
             on_progress=on_progress,
         )
-        return transcript_path, summary_path, minutes_path, notes_path
+        return transcript_path, minutes_path
 
     async def _write_transcript(
         self,
@@ -68,6 +69,27 @@ class GeminiPipeline:
         await _notify(on_progress, "writing_transcript", total, total)
         return transcript_path, combined_transcript
 
+    async def generate_minutes(
+        self,
+        transcript: str,
+        title: str,
+        meet_code: str,
+        admin_instruction: str,
+        append: bool = False,
+        on_progress: Callable[[str, int, int], Awaitable[None] | None] | None = None,
+    ) -> Path:
+        if not admin_instruction.strip():
+            raise ValueError("admin_instruction is required to generate meeting minutes")
+        total = 1
+        await _notify(on_progress, "minutes", 1, total)
+        minutes = await self.summarizer.minutes(transcript, title, admin_instruction)
+        slug = _slug(title or meet_code)
+        minutes_path = self.output_dir / f"meeting-minutes-{slug}.md"
+        marker = document_marker(meet_code)
+        _write_segment(minutes_path, marker, minutes, header=document_title(title or meet_code), append=append)
+        await _notify(on_progress, "writing", 1, total)
+        return minutes_path
+
     async def generate_documents(
         self,
         transcript: str,
@@ -76,30 +98,16 @@ class GeminiPipeline:
         admin_instruction: str,
         append: bool = False,
         on_progress: Callable[[str, int, int], Awaitable[None] | None] | None = None,
-    ) -> tuple[Path, Path, Path]:
-        if not admin_instruction.strip():
-            raise ValueError("admin_instruction is required to generate meeting minutes")
-        total = 3
-        await _notify(on_progress, "summarizing", 1, total)
-        summary = await self.summarizer.summarize(transcript, title, admin_instruction)
-        await _notify(on_progress, "minutes", 2, total)
-        minutes = await self.summarizer.minutes(transcript, title, admin_instruction)
-        slug = _slug(title or meet_code)
-        summary_path = self.output_dir / f"summary-{slug}.md"
-        minutes_path = self.output_dir / f"meeting-minutes-{slug}.md"
-        notes_path = self.output_dir / f"meeting-notes-{slug}.md"
-        marker = _document_marker(meet_code)
-        _write_segment(summary_path, marker, summary, append=append)
-        _write_segment(minutes_path, marker, minutes, header=f"# Meeting Minutes - {title or meet_code}", append=append)
-        _write_segment(
-            notes_path,
-            marker,
-            f"## Summary\n\n{summary}\n\n## Meeting Minutes\n\n{minutes}\n\n## Transcript\n\n{transcript}",
-            header=f"# {title or meet_code}",
+    ) -> tuple[Path, ...]:
+        minutes_path = await self.generate_minutes(
+            transcript,
+            title,
+            meet_code,
+            admin_instruction,
             append=append,
+            on_progress=on_progress,
         )
-        await _notify(on_progress, "writing", 3, total)
-        return summary_path, minutes_path, notes_path
+        return (minutes_path,)
 
 
 async def _notify(
@@ -140,11 +148,6 @@ def _aggregate_marker(results: tuple[MeetingResult, ...] | list[MeetingResult]) 
         f"- Segments: {len(results)}\n"
         f"- Total duration: {format_duration(total_duration)}\n"
     )
-
-
-def _document_marker(meet_code: str) -> str:
-    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-    return f"## Generated {timestamp}\n\n- Meet code: {meet_code}\n"
 
 
 def _write_segment(path: Path, marker: str, content: str, header: str | None = None, append: bool = True) -> None:

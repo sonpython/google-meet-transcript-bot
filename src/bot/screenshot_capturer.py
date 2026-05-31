@@ -5,6 +5,8 @@ from pathlib import Path
 
 import structlog
 
+from src.bot.meet_popups import dismiss_meet_popups
+
 Sleep = Callable[[float], Awaitable[None]]
 
 
@@ -47,6 +49,7 @@ class PeriodicScreenshotCapturer:
     async def capture_once(self) -> Path | None:
         path = self._next_path()
         try:
+            await dismiss_meet_popups(self.page)
             await self.page.screenshot(path=str(path), full_page=False)
         except Exception as exc:
             self.log.warning(

@@ -151,6 +151,8 @@ async def test_run_meeting_is_capped_by_semaphore(tmp_path) -> None:
     runner = JobRunner(repo, run_meeting, max_concurrent_meetings=1)
     first = MeetingEvent("abc-defg-hij", "1", datetime.now(UTC), None, "First", None, ())
     second = MeetingEvent("xyz-uvwx-rst", "2", datetime.now(UTC), None, "Second", None, ())
+    repo.upsert(first)
+    repo.upsert(second)
 
     import anyio
 
@@ -178,6 +180,7 @@ async def test_same_meeting_is_not_run_twice(tmp_path) -> None:
 
     runner = JobRunner(repo, run_meeting, max_concurrent_meetings=2)
     meeting = MeetingEvent("abc-defg-hij", "1", datetime.now(UTC), None, "Same", None, ())
+    repo.upsert(meeting)
 
     import anyio
 
@@ -186,3 +189,20 @@ async def test_same_meeting_is_not_run_twice(tmp_path) -> None:
         task_group.start_soon(runner._run_meeting_capped, meeting)
 
     assert calls == 1
+
+
+@pytest.mark.anyio
+async def test_deleted_meeting_job_is_skipped(tmp_path) -> None:
+    repo = MeetingsRepo(connect(tmp_path / "state.db"))
+    calls = 0
+
+    async def run_meeting(meeting):
+        nonlocal calls
+        calls += 1
+
+    runner = JobRunner(repo, run_meeting, max_concurrent_meetings=1)
+    meeting = MeetingEvent("abc-defg-hij", "1", datetime.now(UTC), None, "Deleted", None, ())
+
+    await runner._run_meeting_capped(meeting)
+
+    assert calls == 0

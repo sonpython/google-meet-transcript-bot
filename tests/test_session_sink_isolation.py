@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from src.bot.audio_tail_trimmer import TrimResult
 from src.bot.meeting_session import MeetingSession
 from src.models.meeting_event import MeetingEvent
 
@@ -365,3 +366,46 @@ async def test_session_does_not_process_when_end_is_not_confirmed(tmp_path, monk
     assert repo.statuses[-1][1] == "recorded"
     assert repo.statuses[-1][2] == "meeting end not confirmed: page_closed"
     assert repo.statuses[-1][4]["meeting_end_confirmed"] == 0
+
+
+@pytest.mark.anyio
+async def test_processing_uses_trimmed_audio_when_alone_tail_is_silent(tmp_path, monkeypatch) -> None:
+    audio = tmp_path / "abc-defg-hij.opus"
+    trimmed = tmp_path / "abc-defg-hij-trimmed.opus"
+    audio.write_bytes(b"audio")
+    trimmed.write_bytes(b"trimmed")
+    processed = []
+
+    def fake_trim(path, keep_seconds, original_duration_seconds):
+        assert path == audio
+        assert keep_seconds == 120
+        assert original_duration_seconds == 420
+        return TrimResult(trimmed, 120, True, "tail_silent")
+
+    async def process_result(result):
+        processed.append((result.audio_path, result.duration_sec))
+        return await fake_process_result(result)
+
+    monkeypatch.setattr("src.bot.meeting_session.trim_trailing_silence_after_participants_left", fake_trim)
+
+    session = MeetingSession(
+        FakeRepo(),
+        FakeBrowserFactory(),
+        tmp_path,
+        "meet_capture.monitor",
+        "Bot",
+        process_result,
+    )
+
+    await session._process_recordings(
+        meeting("abc-defg-hij"),
+        [audio],
+        [420],
+        420,
+        "alone",
+        ("Host", "Bot"),
+        datetime(2026, 5, 20, tzinfo=UTC),
+        120,
+    )
+
+    assert processed == [(trimmed, 120)]

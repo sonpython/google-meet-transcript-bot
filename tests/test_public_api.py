@@ -88,3 +88,15 @@ def test_api_transcripts_can_find_by_meeting_code(tmp_path: Path, monkeypatch) -
     assert result["count"] == 1
     assert result["meetings"][0]["meet_code"] == "abc-defg-hij"
     assert result["meetings"][0]["transcript"] == "Transcript body"
+
+
+def test_admin_audio_segments_default_to_trimmed_variant(tmp_path: Path) -> None:
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    original = audio_dir / "abc-defg-hij.opus"
+    trimmed = audio_dir / "abc-defg-hij-trimmed.opus"
+    original.write_bytes(b"original")
+    trimmed.write_bytes(b"trimmed")
+
+    assert health_server._audio_segment_paths("abc-defg-hij", audio_dir) == [trimmed]
+    assert health_server._audio_segment_paths("abc-defg-hij", audio_dir, mode="full") == [original]

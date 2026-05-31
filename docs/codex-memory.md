@@ -14,6 +14,107 @@ Google Meet transcript bot for Workspace meetings.
 
 ## Latest Session
 
+### 2026-05-29 — admin-delete-meeting-and-logout
+
+Actor: Codex.
+
+Done:
+
+- Added admin Delete action on meeting detail for non-joining/non-recording meetings.
+- Delete removes the meeting row and related admin commands from the DB; generated/audio files are left on disk.
+- Scheduler now skips a queued job if its meeting row was deleted before run time.
+- Added Settings logout form that expires the admin cookie and redirects to `/admin`.
+- Deployed to Docker host `192.168.1.120` and verified container health.
+
+Verification:
+
+- `uv run pytest` -> 86 passed.
+- `uv run python -m compileall src tests` -> passed.
+
+### 2026-05-29 — manual-join-scheduled-choice-and-meet-popups
+
+Actor: Codex.
+
+Done:
+
+- Manual Meet add now returns a choice when the Meet code maps to a future scheduled calendar event: join now or join on scheduled time.
+- Added `join_scheduled` admin command and scheduler path so manually added future meetings can be queued for their actual start time.
+- Manual placeholder meetings refresh their title from the live Meet page after the bot is admitted.
+- Added shared Meet popup dismissal for Google Meet/Gemini/AI prompts before join, while waiting for admission, and before screenshots.
+- Deployed to Docker host `192.168.1.120` and verified container health.
+
+Verification:
+
+- `uv run pytest` -> 83 passed.
+- `uv run python -m compileall src tests` -> passed.
+
+### 2026-05-29 — meeting-minutes-report-template
+
+Actor: Codex.
+
+Done:
+
+- Moved meeting-minutes markdown header generation into `src/gemini/report_template.py`.
+- Updated generated meeting-minutes reports so the Meet code appears directly under the generated timestamp instead of as a bullet line.
+- Deployed to Docker host `192.168.1.120` and verified container health.
+
+Verification:
+
+- `uv run pytest` -> 79 passed.
+- `uv run python -m compileall src tests` -> passed.
+
+### 2026-05-29 — regenerate-transcript-stuck-recovery
+
+Actor: Codex.
+
+Done:
+
+- Investigated latest meeting `ojo-mkpi-hza` stuck at `transcribing 1/1` after a manual transcript regeneration.
+- Found admin command `37` left in `running` state across deploy/restart, then reset it once so the worker could retry.
+- The retry reached Gemini transcription but did not complete; the old transcript still contained Gemini `503 UNAVAILABLE` high-demand chunk failures.
+- Stopped the UI spinner by marking the command and meeting failed with an explicit retry-later error.
+- Added startup recovery for interrupted `regenerate` and `regenerate_transcript` admin commands so a service restart cannot leave admin stuck on a stale `running` command.
+- Deployed to Docker host `192.168.1.120` and verified container health.
+
+Verification:
+
+- `uv run pytest` -> 79 passed.
+- `uv run python -m compileall src tests` -> passed.
+
+### 2026-05-29 — trim-alone-silent-tail
+
+Actor: Codex.
+
+Done:
+
+- Added an audio tail trimmer that checks the post-participant-leave tail with FFmpeg `volumedetect`.
+- When Meet exits with reason `alone`, processing now trims the final silent tail before Gemini transcription only if that tail is actually silent.
+- Original `.opus` files are kept; Gemini receives a generated `*-trimmed.opus` when trimming succeeds.
+- Admin audio playback now defaults to the trimmed audio segment when present and exposes a small dropdown beside Load audio to fetch full original audio including the silent tail.
+- Deployed to Docker host `192.168.1.120` and verified container health.
+
+Verification:
+
+- `uv run pytest` -> 78 passed.
+- `uv run python -m compileall src tests` -> passed.
+
+### 2026-05-29 — transcript-regeneration-admin-fix
+
+Actor: Codex.
+
+Done:
+
+- Added a separate admin `regenerate_transcript` command and `/admin/api/meetings/{meet_code}/regenerate-transcript` endpoint that rebuilds transcript from retained audio instead of reusing a failed transcript.
+- Changed manual meeting-minutes generation to produce only transcript + meeting minutes; summary and combined notes are no longer generated or shown in admin.
+- Added a small regenerate-transcript action beside the Transcript copy control in admin.
+- Kept screenshot gallery visible in admin and replaced the vague empty state with a config/path hint when no screenshots are found.
+- Deployed to Docker host `192.168.1.120` and verified container health.
+
+Verification:
+
+- `uv run pytest` -> 73 passed.
+- `uv run python -m compileall src tests` -> passed.
+
 ### 2026-05-26 — periodic-meeting-screenshots
 
 Actor: Codex.

@@ -1,6 +1,7 @@
 import pytest
 
-from src.bot.meet_joiner import MeetJoiner
+from src.bot.meet_joiner import MeetJoiner, _clean_meeting_title
+from src.bot.meet_popups import dismiss_meet_popups
 
 
 class FakeButton:
@@ -18,10 +19,13 @@ class FakeButton:
 
 
 class FakeLocator:
-    def __init__(self, page) -> None:
+    def __init__(self, page, counts_for_join: bool = False) -> None:
         self.page = page
+        self.counts_for_join = counts_for_join
 
     async def count(self) -> int:
+        if not self.counts_for_join:
+            return 0
         self.page.polls += 1
         return 1 if self.page.polls >= self.page.visible_after else 0
 
@@ -36,7 +40,28 @@ class FakePage:
         self.button = FakeButton()
 
     def locator(self, selector: str) -> FakeLocator:
-        return FakeLocator(self)
+        return FakeLocator(self, counts_for_join="Join now" in selector)
+
+
+class PopupLocator:
+    def __init__(self, button: FakeButton | None = None) -> None:
+        self.button = button
+
+    async def count(self) -> int:
+        return 1 if self.button else 0
+
+    def nth(self, index: int) -> FakeButton:
+        return self.button
+
+
+class PopupPage:
+    def __init__(self) -> None:
+        self.dismiss_button = FakeButton()
+
+    def locator(self, selector: str) -> PopupLocator:
+        if "Not now" in selector:
+            return PopupLocator(self.dismiss_button)
+        return PopupLocator()
 
 
 class SignedOutPage:
@@ -68,3 +93,18 @@ async def test_join_reports_signed_out_account() -> None:
 
     assert result.status == "signed_out"
     assert result.error_msg == "bot Google session signed out; re-auth required"
+
+
+@pytest.mark.anyio
+async def test_dismiss_meet_popups_clicks_not_now_prompt() -> None:
+    page = PopupPage()
+
+    clicked = await dismiss_meet_popups(page)
+
+    assert clicked == 1
+    assert page.dismiss_button.clicked is True
+
+
+def test_clean_meeting_title_removes_google_meet_suffix_and_rejects_fallback() -> None:
+    assert _clean_meeting_title("Product Review - Google Meet", "Manual Meet abc-defg-hij") == "Product Review"
+    assert _clean_meeting_title("Manual Meet abc-defg-hij", "Manual Meet abc-defg-hij") == ""

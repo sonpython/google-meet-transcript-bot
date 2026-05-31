@@ -119,6 +119,34 @@ class MeetingsRepo:
         self.conn.commit()
         return int(cur.lastrowid)
 
+    def request_join_scheduled(self, meet_code: str) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO admin_commands (command, meet_code, status)
+            VALUES ('join_scheduled', ?, 'pending')
+            """,
+            (meet_code,),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def update_title(self, meet_code: str, title: str) -> None:
+        self.conn.execute(
+            """
+            UPDATE meetings
+            SET title=?, updated_at=CURRENT_TIMESTAMP
+            WHERE meet_code=?
+            """,
+            (title, meet_code),
+        )
+        self.conn.commit()
+
+    def delete_meeting(self, meet_code: str) -> bool:
+        self.conn.execute("DELETE FROM admin_commands WHERE meet_code=?", (meet_code,))
+        cur = self.conn.execute("DELETE FROM meetings WHERE meet_code=?", (meet_code,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def request_force_out(self, meet_code: str) -> int:
         cur = self.conn.execute(
             """
@@ -135,6 +163,17 @@ class MeetingsRepo:
             """
             INSERT INTO admin_commands (command, meet_code, status)
             VALUES ('regenerate', ?, 'pending')
+            """,
+            (meet_code,),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def request_regenerate_transcript(self, meet_code: str) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO admin_commands (command, meet_code, status)
+            VALUES ('regenerate_transcript', ?, 'pending')
             """,
             (meet_code,),
         )
@@ -175,7 +214,7 @@ class MeetingsRepo:
             self.conn.execute(
                 """
                 SELECT * FROM admin_commands
-                WHERE command='rejoin' AND status='pending'
+                WHERE command IN ('rejoin', 'join_scheduled') AND status='pending'
                 ORDER BY created_at
                 LIMIT ?
                 """,
@@ -195,7 +234,7 @@ class MeetingsRepo:
             self.conn.execute(
                 """
                 SELECT * FROM admin_commands
-                WHERE command='regenerate' AND status='pending'
+                WHERE command IN ('regenerate', 'regenerate_transcript') AND status='pending'
                 ORDER BY created_at
                 LIMIT ?
                 """,
