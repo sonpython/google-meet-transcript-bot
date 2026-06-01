@@ -128,6 +128,25 @@ class FakeScreenshotCapturer:
         self.events.append(("stop", self.meet_code, self.screenshot_dir, self.interval_seconds))
 
 
+class FakeSpeakerActivityRecorder:
+    events = []
+
+    def __init__(self, page, meet_code, ignored_names=(), poll_seconds=1.0):
+        self.meet_code = meet_code
+
+    def start(self):
+        self.events.append(("start", self.meet_code))
+
+    async def stop(self):
+        self.events.append(("stop", self.meet_code))
+
+    def start_segment(self, audio_path):
+        self.events.append(("segment_start", Path(audio_path).name))
+
+    def finish_segment(self):
+        self.events.append(("segment_finish", self.meet_code))
+
+
 @pytest.mark.anyio
 async def test_session_uses_distinct_sink_and_monitor_per_meeting(tmp_path, monkeypatch) -> None:
     created = []
@@ -199,6 +218,7 @@ async def test_session_removes_sink_when_join_fails(tmp_path, monkeypatch) -> No
 @pytest.mark.anyio
 async def test_session_starts_and_stops_screenshot_capture_while_recording(tmp_path, monkeypatch) -> None:
     FakeScreenshotCapturer.events = []
+    FakeSpeakerActivityRecorder.events = []
 
     class AloneMonitor:
         def __init__(self, page, should_force_exit, health_check=None):
@@ -211,6 +231,7 @@ async def test_session_starts_and_stops_screenshot_capture_while_recording(tmp_p
     monkeypatch.setattr("src.bot.meeting_session.MeetJoiner", FakeMeetJoiner)
     monkeypatch.setattr("src.bot.meeting_session.MeetMonitor", AloneMonitor)
     monkeypatch.setattr("src.bot.meeting_session.PeriodicScreenshotCapturer", FakeScreenshotCapturer)
+    monkeypatch.setattr("src.bot.meeting_session.SpeakerActivityRecorder", FakeSpeakerActivityRecorder)
     monkeypatch.setattr("src.bot.meeting_session.create_session_sink", lambda sink: f"{sink}.monitor")
     monkeypatch.setattr("src.bot.meeting_session.remove_session_sink", lambda sink: None)
 
@@ -231,6 +252,12 @@ async def test_session_starts_and_stops_screenshot_capture_while_recording(tmp_p
     assert FakeScreenshotCapturer.events == [
         ("start", "abc-defg-hij", screenshot_dir, 300),
         ("stop", "abc-defg-hij", screenshot_dir, 300),
+    ]
+    assert FakeSpeakerActivityRecorder.events == [
+        ("start", "abc-defg-hij"),
+        ("segment_start", "abc-defg-hij.opus"),
+        ("segment_finish", "abc-defg-hij"),
+        ("stop", "abc-defg-hij"),
     ]
 
 

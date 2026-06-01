@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from src import health_server
 from src import main as app_main
+from src.bot.speaker_activity_recorder import speaker_timeline_path
 from src.config import Settings
 from src.models.meeting_event import MeetingEvent
 from src.state.db import connect
@@ -254,10 +255,13 @@ def test_regenerate_transcript_command_uses_audio_without_instruction(tmp_path: 
     settings.output_dir.mkdir(parents=True)
     audio_path = settings.audio_dir / "abc-defg-hij.opus"
     audio_path.write_bytes(b"audio")
+    speaker_timeline_path(audio_path).write_text('{"version":1,"events":[]}', encoding="utf-8")
     transcript_path = settings.output_dir / "transcript-weekly-sync.md"
+    captured = {}
 
     class Processor:
         async def process_many(self, results, append=True, on_progress=None, generate_documents=False):
+            captured["speaker_timeline_path"] = results[0].speaker_timeline_path
             transcript_path.write_text("Fresh transcript", encoding="utf-8")
             return (transcript_path,)
 
@@ -290,6 +294,7 @@ def test_regenerate_transcript_command_uses_audio_without_instruction(tmp_path: 
     assert meeting["summary_path"] is None
     assert meeting["notes_path"] == str(transcript_path)
     assert command["status"] == "done"
+    assert captured["speaker_timeline_path"] == speaker_timeline_path(audio_path)
 
 
 def test_recover_interrupted_admin_commands_marks_running_regenerate_failed(tmp_path: Path) -> None:

@@ -13,3 +13,4 @@ class MeetingResult:
     title: str = ""
     actual_end_utc: datetime | None = None
     admin_instruction: str = ""
+    speaker_timeline_path: Path | None = None

@@ -36,6 +36,7 @@ Participant names nếu có: {participant_names}
 Yêu cầu:
 - Transcribe toàn bộ nội dung sang văn bản tiếng Việt chính xác.
 - Phân biệt speaker nhất quán bằng tên chuẩn trong danh bạ khi có bằng chứng rõ, ví dụ "Michael Phan (Sơn):", "Adrian (Quân):".
+- Nếu prompt có "Speaker activity hints", chỉ dùng như gợi ý phụ từ Google Meet UI. Nếu audio mâu thuẫn hoặc không chắc, ưu tiên audio và dùng "Người nói A/B" thay vì ép tên.
 - Nếu không đủ bằng chứng để map người nói, dùng "Người nói A:", "Người nói B:" thay vì bịa tên.
 - Thêm timestamp [HH:MM:SS] mỗi khoảng 30 giây hoặc khi đổi speaker.
 - Không thêm bình luận ngoài transcript.

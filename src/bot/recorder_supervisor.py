@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Callable
 
 import structlog
 
@@ -15,6 +16,8 @@ class RecorderSupervisor:
         meet_code: str,
         audio_source: str,
         check_seconds: int = 5,
+        on_segment_start: Callable[[Path], None] | None = None,
+        on_segment_finish: Callable[[Path, int], None] | None = None,
     ) -> None:
         self.audio_dir = audio_dir
         self.default_source = default_source
@@ -27,6 +30,8 @@ class RecorderSupervisor:
         self._started_at: datetime | None = None
         self._task: asyncio.Task | None = None
         self._stopping = False
+        self.on_segment_start = on_segment_start
+        self.on_segment_finish = on_segment_finish
         self.log = structlog.get_logger(__name__)
 
     def start(self) -> Path:
@@ -65,6 +70,8 @@ class RecorderSupervisor:
         self._recorder = AudioRecorder(self.audio_dir, self.default_source)
         self._started_at = datetime.now(UTC)
         path = self._recorder.start(self.meet_code, audio_source=self.audio_source)
+        if self.on_segment_start:
+            self.on_segment_start(path)
         self.log.info("recorder_supervisor_segment_started", meet_code=self.meet_code, audio_path=str(path))
         return path
 
@@ -82,6 +89,8 @@ class RecorderSupervisor:
                 if path not in self.paths:
                     self.paths.append(path)
                     self.durations.append(duration)
+                if self.on_segment_finish:
+                    self.on_segment_finish(path, duration)
                 self.log.info(
                     "recorder_supervisor_segment_finished",
                     meet_code=self.meet_code,

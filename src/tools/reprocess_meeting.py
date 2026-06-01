@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from src.config import load_settings
+from src.bot.speaker_activity_recorder import speaker_timeline_path
 from src.gemini.client import GeminiClient
 from src.gemini.pipeline import GeminiPipeline, _slug
 from src.models.meeting_result import MeetingResult
@@ -64,6 +65,7 @@ async def main() -> None:
                 participant_names=participants,
                 title=title,
                 admin_instruction=str(row["admin_instruction"] or "") if "admin_instruction" in row.keys() else "",
+                speaker_timeline_path=_speaker_timeline_for_audio(audio_path),
             )
         )
 
@@ -138,6 +140,11 @@ def _duration_seconds(path: Path) -> int:
         return max(1, int(float(result.stdout.strip())))
     except (TypeError, ValueError):
         return 0
+
+
+def _speaker_timeline_for_audio(audio_path: Path) -> Path | None:
+    path = speaker_timeline_path(audio_path)
+    return path if path.exists() else None
 
 
 if __name__ == "__main__":

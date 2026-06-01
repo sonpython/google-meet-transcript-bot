@@ -38,9 +38,19 @@ class FakeRecorder:
 @pytest.mark.anyio
 async def test_supervisor_restarts_recorder_without_leaving_meeting(tmp_path, monkeypatch) -> None:
     FakeRecorder.instances = []
+    starts = []
+    finishes = []
     monkeypatch.setattr("src.bot.recorder_supervisor.AudioRecorder", FakeRecorder)
 
-    supervisor = RecorderSupervisor(tmp_path, "default.monitor", "abc-defg-hij", "session.monitor", check_seconds=0)
+    supervisor = RecorderSupervisor(
+        tmp_path,
+        "default.monitor",
+        "abc-defg-hij",
+        "session.monitor",
+        check_seconds=0,
+        on_segment_start=lambda path: starts.append(path.name),
+        on_segment_finish=lambda path, _duration: finishes.append(path.name),
+    )
     first_path = supervisor.start()
     FakeRecorder.instances[0].running = False
 
@@ -54,6 +64,8 @@ async def test_supervisor_restarts_recorder_without_leaving_meeting(tmp_path, mo
     assert first_path.name == "abc-defg-hij-1.opus"
     assert [item.source for item in FakeRecorder.instances] == ["session.monitor", "session.monitor"]
     assert [path.name for path in supervisor.paths] == ["abc-defg-hij-1.opus", "abc-defg-hij-2.opus"]
+    assert starts == ["abc-defg-hij-1.opus", "abc-defg-hij-2.opus"]
+    assert finishes == ["abc-defg-hij-1.opus", "abc-defg-hij-2.opus"]
 
 
 @pytest.mark.anyio

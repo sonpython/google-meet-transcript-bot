@@ -10,6 +10,8 @@ from src.models.meeting_result import MeetingResult
 
 
 class FakeChunker:
+    chunk_seconds = 840
+
     async def chunk(self, audio_path: Path, output_dir: Path) -> list[AudioChunk]:
         first = output_dir / "chunk-000.mp3"
         second = output_dir / "chunk-001.mp3"
@@ -51,6 +53,40 @@ def test_transcriber_chunks_audio_with_offsets(tmp_path: Path) -> None:
     assert len(client.audio_calls) == 2
     assert "Weekly Sync" in client.audio_calls[0][1]
     assert "+840 seconds" in client.audio_calls[1][1]
+
+
+def test_transcriber_injects_chunk_scoped_speaker_hints(tmp_path: Path) -> None:
+    client = FakeGeminiClient()
+    timeline = tmp_path / "meeting.opus.speakers.json"
+    timeline.write_text(
+        """
+        {
+          "version": 1,
+          "events": [
+            {"start": 10, "end": 20, "speaker": "An", "source": "meet_dom", "confidence": 0.65},
+            {"start": 900, "end": 920, "speaker": "Binh", "source": "meet_dom", "confidence": 0.65},
+            {"start": 1500, "end": 1600, "speaker": "Late", "source": "meet_dom", "confidence": 0.65}
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+    transcriber = Transcriber(client, chunker=FakeChunker(), work_dir=tmp_path / "chunks")
+
+    asyncio.run(
+        transcriber.transcribe(
+            tmp_path / "meeting.opus",
+            ("An", "Binh"),
+            "Weekly Sync",
+            speaker_timeline_path=timeline,
+            duration_sec=1000,
+        )
+    )
+
+    assert "likely An" in client.audio_calls[0][1]
+    assert "likely Binh" not in client.audio_calls[0][1]
+    assert "likely Binh" in client.audio_calls[1][1]
+    assert "likely Late" not in client.audio_calls[1][1]
 
 
 def test_transcriber_marks_failed_chunk_after_repeated_loop(tmp_path: Path, monkeypatch) -> None:

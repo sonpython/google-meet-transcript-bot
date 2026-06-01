@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from src.gemini.audio_chunker import AudioChunker
+from src.gemini.speaker_timeline import format_chunk_speaker_hints, load_speaker_hints
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "transcribe_vn_v1.md"
 
@@ -19,17 +20,26 @@ class Transcriber:
         participants: tuple[str, ...],
         title: str,
         admin_instruction: str = "",
+        speaker_timeline_path: Path | None = None,
+        duration_sec: int | None = None,
     ) -> str:
         prompt = _build_prompt(participants, title, admin_instruction)
+        speaker_hints = load_speaker_hints(speaker_timeline_path, duration_sec)
         chunk_dir = self.work_dir / _slug(audio_path.stem)
         chunks = await self.chunker.chunk(audio_path, chunk_dir)
         transcript_parts: list[str] = []
         for index, chunk in enumerate(chunks, start=1):
+            chunk_end = chunk.offset_seconds + self.chunker.chunk_seconds
+            if duration_sec is not None and duration_sec > 0:
+                chunk_end = min(chunk_end, duration_sec)
+            hint_text = format_chunk_speaker_hints(speaker_hints, chunk.offset_seconds, chunk_end)
             chunk_prompt = (
                 f"{prompt}\n\n"
                 f"Chunk {index}/{len(chunks)} starts at +{chunk.offset_seconds} seconds. "
                 "Use this offset as the reliable time anchor. Do not invent absolute timestamps."
             )
+            if hint_text:
+                chunk_prompt = f"{chunk_prompt}\n\n{hint_text}"
             text = await _retry_chunk(
                 lambda chunk_path=chunk.path, prompt_text=chunk_prompt: self._transcribe_chunk(
                     chunk_path,

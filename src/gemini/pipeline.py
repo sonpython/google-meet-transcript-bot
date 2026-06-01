@@ -59,6 +59,8 @@ class GeminiPipeline:
                 result.participant_names,
                 result.title,
                 result.admin_instruction,
+                result.speaker_timeline_path,
+                result.duration_sec,
             )
             transcript_parts.append(f"{_segment_marker(result)}\n{transcript}")
         combined_transcript = "\n\n---\n\n".join(transcript_parts).strip()

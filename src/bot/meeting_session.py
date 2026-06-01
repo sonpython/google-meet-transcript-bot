@@ -12,6 +12,7 @@ from src.bot.meet_joiner import MeetJoiner
 from src.bot.meet_monitor import MeetMonitor
 from src.bot.recorder_supervisor import RecorderSupervisor
 from src.bot.screenshot_capturer import PeriodicScreenshotCapturer
+from src.bot.speaker_activity_recorder import SpeakerActivityRecorder, speaker_timeline_path
 from src.models.meeting_event import MeetingEvent
 from src.models.meeting_result import MeetingResult
 from src.runtime_audio import create_session_sink, remove_session_sink, safe_session_sink_name
@@ -66,6 +67,7 @@ class MeetingSession:
             session = None
             recorder = None
             screenshot_capturer = None
+            speaker_activity_recorder = None
             first_audio_path = None
             sink_name = None
             monitor_source = self.audio_source
@@ -94,7 +96,20 @@ class MeetingSession:
                     self.repo.mark_status(meeting.meet_code, "failed", error)
                     return
                 meeting = await self._refresh_manual_title(meeting, joiner, session.page)
-                recorder = RecorderSupervisor(self.audio_dir, self.audio_source, meeting.meet_code, monitor_source)
+                speaker_activity_recorder = SpeakerActivityRecorder(
+                    session.page,
+                    meeting.meet_code,
+                    ignored_names=(self.display_name,),
+                )
+                speaker_activity_recorder.start()
+                recorder = RecorderSupervisor(
+                    self.audio_dir,
+                    self.audio_source,
+                    meeting.meet_code,
+                    monitor_source,
+                    on_segment_start=speaker_activity_recorder.start_segment,
+                    on_segment_finish=lambda _path, _duration: speaker_activity_recorder.finish_segment(),
+                )
                 first_audio_path = recorder.start()
                 self.repo.mark_status(meeting.meet_code, "recording", audio_path=str(first_audio_path))
                 screenshot_capturer = self._start_screenshot_capture(session.page, meeting.meet_code)
@@ -148,6 +163,8 @@ class MeetingSession:
                 )
                 return
             finally:
+                if speaker_activity_recorder:
+                    await speaker_activity_recorder.stop()
                 if screenshot_capturer:
                     await screenshot_capturer.stop()
                 if session:
@@ -318,6 +335,7 @@ class MeetingSession:
                             meeting.title,
                             actual_end,
                             admin_instruction,
+                            _speaker_timeline_for_audio(path),
                         )
                     )
                 if hasattr(self.process_result, "process_many"):
@@ -385,6 +403,7 @@ class MeetingSession:
             modified = datetime.fromtimestamp(path.stat().st_mtime, UTC)
             if days <= 0 or modified < cutoff:
                 try:
+                    speaker_timeline_path(path).unlink(missing_ok=True)
                     os.remove(path)
                 except FileNotFoundError:
                     pass
@@ -418,3 +437,8 @@ def _normalize_output_paths(output_paths) -> tuple[Path, dict[str, str]]:
 
 def _should_refresh_title(meeting: MeetingEvent) -> bool:
     return meeting.event_id.startswith("manual:") or meeting.title.startswith("Manual Meet ")
+
+
+def _speaker_timeline_for_audio(audio_path: Path) -> Path | None:
+    path = speaker_timeline_path(audio_path)
+    return path if path.exists() else None

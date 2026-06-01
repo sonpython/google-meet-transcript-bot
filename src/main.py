@@ -13,6 +13,7 @@ from src.auth.token_store import TokenStore
 from src.bot.browser_session import BrowserSessionFactory
 from src.bot.meeting_session import MeetingSession
 from src.bot.session_keepalive import BotSessionKeepAlive
+from src.bot.speaker_activity_recorder import speaker_timeline_path
 from src.bot.storage_state_store import StorageStateStore
 from src.calendar_watcher.client import CalendarClient
 from src.calendar_watcher.watcher import CalendarWatcher
@@ -289,6 +290,7 @@ async def _run_regenerate_command(settings, command, result_processor) -> None:
                         title=row["title"] or meet_code,
                         actual_end_utc=_parse_dt(row["actual_end_utc"]),
                         admin_instruction=instruction,
+                        speaker_timeline_path=_speaker_timeline_for_audio(audio_path),
                     )
                 )
             transcript_only = await result_processor.process_many(
@@ -343,6 +345,11 @@ def _participants(row) -> tuple[str, ...]:
         except json.JSONDecodeError:
             pass
     return tuple(dict.fromkeys(str(name) for name in names if name))
+
+
+def _speaker_timeline_for_audio(audio_path: Path) -> Path | None:
+    path = speaker_timeline_path(audio_path)
+    return path if path.exists() else None
 
 
 def _audio_paths(audio_dir: Path, meet_code: str) -> list[Path]:
