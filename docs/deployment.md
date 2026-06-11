@@ -82,3 +82,32 @@ docker compose restart meeting-assistant
 3. Run Calendar OAuth and bot login in an interactive environment to generate encrypted token files.
 4. Restart the service.
 5. Map Cloudflare Tunnel for `meet-assistant.sonpython.com` to `http://localhost:18080`.
+
+## Bot Google Session Re-Auth
+
+The bot's Google web session expires per the Workspace session-control policy
+(observed `passive=1209600` = 14 days). When it expires, headless password
+reauth hits a "verify it's you" challenge and cannot recover on its own; the
+keepalive job then sends a Telegram/Discord alert and pauses reauth attempts.
+
+To restore the session from a workstation:
+
+```bash
+# 1. Headed login; auto-saves encrypted storageState once login completes.
+#    Get STORAGE_PASSPHRASE from /opt/meeting-assistant/.env on the host.
+#    Beware: command substitution over ssh can capture terminal escape
+#    sequences from the host shell — copy the value manually if unsure.
+STORAGE_PASSPHRASE=... PYTHONPATH=. \
+  uv run python scripts/bot_reauth_local.py --out /tmp/storage-state.fernet
+
+# 2. Deploy and recreate (restart alone can leave a stale PulseAudio pid file).
+ssh root@192.168.1.120 "cp /opt/meeting-assistant/data/tokens/storage-state.fernet /opt/meeting-assistant/data/tokens/storage-state.fernet.bak"
+scp /tmp/storage-state.fernet root@192.168.1.120:/opt/meeting-assistant/data/tokens/storage-state.fernet
+ssh root@192.168.1.120 "cd /opt/meeting-assistant && docker compose up -d --force-recreate meeting-assistant"
+
+# 3. Verify: wait for bot_session_keepalive_ok in logs.
+```
+
+Permanent fix: in Google Admin console (Security → Google session control),
+set the bot account's OU web session duration to "Session never expires" so
+the 14-day expiry stops logging the bot out.

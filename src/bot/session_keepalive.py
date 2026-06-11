@@ -1,3 +1,5 @@
+import time
+
 import structlog
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -14,6 +16,12 @@ LOGIN_CHALLENGE_MARKERS = (
     "xác minh bạn",
 )
 
+# Repeated headless password logins from a datacenter IP look like an attack to
+# Google and can poison the bot account's reputation, so reauth attempts pause
+# after this many consecutive sign-in failures until a human restores the session.
+MAX_CONSECUTIVE_REAUTH_FAILURES = 3
+ALERT_COOLDOWN_SECONDS = 6 * 3600
+
 
 class BotSessionKeepAlive:
     def __init__(
@@ -23,13 +31,17 @@ class BotSessionKeepAlive:
         bot_email: str,
         bot_password: str | None = None,
         url: str = "https://myaccount.google.com/",
+        notifier=None,
     ) -> None:
         self.browser_factory = browser_factory
         self.storage_state_store = storage_state_store
         self.bot_email = bot_email
         self.bot_password = bot_password
         self.url = url
+        self.notifier = notifier
         self.log = structlog.get_logger(__name__)
+        self._consecutive_failures = 0
+        self._last_alert_monotonic: float | None = None
 
     async def run(self) -> bool:
         session = await self.browser_factory.launch_with_state()
@@ -37,19 +49,51 @@ class BotSessionKeepAlive:
             await session.page.goto(self.url, wait_until="domcontentloaded", timeout=30_000)
             if await self._is_signed_out(session.page):
                 self.log.warning("bot_session_keepalive_signed_out", url=session.page.url)
-                if not await self._reauth(session.page):
-                    return False
+                if self._consecutive_failures >= MAX_CONSECUTIVE_REAUTH_FAILURES:
+                    self.log.warning(
+                        "bot_session_reauth_paused",
+                        consecutive_failures=self._consecutive_failures,
+                    )
+                elif not await self._reauth(session.page):
+                    return await self._record_failure()
             if await self._is_signed_out(session.page):
                 self.log.warning("bot_session_keepalive_still_signed_out", url=session.page.url)
-                return False
+                return await self._record_failure()
             self.storage_state_store.save(await session.context.storage_state())
             self.log.info("bot_session_keepalive_ok", url=session.page.url)
+            await self._record_recovery()
             return True
         except Exception as exc:
             self.log.warning("bot_session_keepalive_failed", error=str(exc))
             return False
         finally:
             await session.close()
+
+    async def _record_failure(self) -> bool:
+        self._consecutive_failures += 1
+        now = time.monotonic()
+        cooldown_active = (
+            self._last_alert_monotonic is not None
+            and now - self._last_alert_monotonic < ALERT_COOLDOWN_SECONDS
+        )
+        if self.notifier and not cooldown_active:
+            self._last_alert_monotonic = now
+            await self._notify(
+                "ALERT: bot Google session signed out and auto reauth failed: manual relogin required"
+            )
+        return False
+
+    async def _record_recovery(self) -> None:
+        if self._consecutive_failures and self.notifier:
+            await self._notify("OK: bot Google session restored")
+        self._consecutive_failures = 0
+        self._last_alert_monotonic = None
+
+    async def _notify(self, text: str) -> None:
+        try:
+            await self.notifier.send_text(text)
+        except Exception as exc:
+            self.log.warning("bot_session_keepalive_notify_failed", error=str(exc))
 
     async def _is_signed_out(self, page) -> bool:
         url = getattr(page, "url", "")

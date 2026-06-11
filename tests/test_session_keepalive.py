@@ -1,6 +1,14 @@
 import pytest
 
-from src.bot.session_keepalive import BotSessionKeepAlive
+from src.bot.session_keepalive import MAX_CONSECUTIVE_REAUTH_FAILURES, BotSessionKeepAlive
+
+
+class FakeNotifier:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    async def send_text(self, text: str) -> None:
+        self.messages.append(text)
 
 
 class FakePage:
@@ -81,3 +89,49 @@ async def test_keepalive_treats_public_account_page_as_signed_out() -> None:
     assert ok is False
     assert store.saved is None
     assert factory.session.closed is True
+
+
+@pytest.mark.anyio
+async def test_keepalive_alerts_once_within_cooldown_when_signed_out() -> None:
+    factory = FakeBrowserFactory("https://accounts.google.com/v3/signin/accountchooser")
+    notifier = FakeNotifier()
+    keepalive = BotSessionKeepAlive(factory, FakeStorageStore(), "bot@example.com", notifier=notifier)
+
+    assert await keepalive.run() is False
+    assert await keepalive.run() is False
+
+    assert notifier.messages == [
+        "ALERT: bot Google session signed out and auto reauth failed: manual relogin required"
+    ]
+
+
+@pytest.mark.anyio
+async def test_keepalive_sends_recovery_message_after_failures() -> None:
+    factory = FakeBrowserFactory("https://accounts.google.com/v3/signin/accountchooser")
+    notifier = FakeNotifier()
+    keepalive = BotSessionKeepAlive(factory, FakeStorageStore(), "bot@example.com", notifier=notifier)
+    assert await keepalive.run() is False
+
+    factory.session.page.url = "https://myaccount.google.com/"
+    assert await keepalive.run() is True
+
+    assert notifier.messages[-1] == "OK: bot Google session restored"
+    assert keepalive._consecutive_failures == 0
+
+
+@pytest.mark.anyio
+async def test_keepalive_pauses_reauth_after_repeated_failures() -> None:
+    factory = FakeBrowserFactory("https://accounts.google.com/v3/signin/accountchooser")
+    keepalive = BotSessionKeepAlive(factory, FakeStorageStore(), "bot@example.com", bot_password="pw")
+    reauth_calls = 0
+
+    async def fake_reauth(page) -> bool:
+        nonlocal reauth_calls
+        reauth_calls += 1
+        return False
+
+    keepalive._reauth = fake_reauth
+    for _ in range(MAX_CONSECUTIVE_REAUTH_FAILURES + 2):
+        assert await keepalive.run() is False
+
+    assert reauth_calls == MAX_CONSECUTIVE_REAUTH_FAILURES
