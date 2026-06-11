@@ -14,6 +14,29 @@ Google Meet transcript bot for Workspace meetings.
 
 ## Latest Session
 
+### 2026-06-01 — meet-speaker-activity-hints
+
+Actor: backfilled by Claude Code on 2026-06-11 from git commit `de715ed` (author sonpython).
+
+Done:
+
+- Added `src/bot/speaker_activity_recorder.py`: polls the live Meet UI during recording and writes a speaker-activity timeline JSON next to the audio file.
+- Added `src/gemini/speaker_timeline.py`: loads the timeline, merges adjacent segments, and formats per-chunk "Speaker activity hints" text.
+- `Transcriber.transcribe()` now accepts `speaker_timeline_path` + `duration_sec` and appends chunk-scoped speaker hints to each Gemini chunk prompt.
+- Updated `transcribe_vn_v1.md` prompt: hints are advisory only; audio wins on conflict, fall back to "Người nói A/B".
+- Wired through `meeting_session.py`, `recorder_supervisor.py`, `pipeline.py`, `main.py`, and `reprocess_meeting.py`; `MeetingResult` carries the timeline path.
+
+### 2026-05-31 / 2026-06-01 — pdf-export-title-and-metadata
+
+Actor: backfilled by Claude Code on 2026-06-11 from git commits `da12ac8`, `7bc8861` (author sonpython).
+
+Done:
+
+- Meeting Minutes PDF export title now includes meeting title, Meet code, and scheduled start date stamp (`meetingPdfTitle()` in the admin UI script).
+- PDF export strips inline `## Generated ...` / `Meet code:` metadata lines from the markdown body and shows the Meet code in the PDF header instead.
+- Added `@page` print CSS rules to suppress browser default headers/footers and print a centered page counter.
+- All changes in `src/health_server.py` admin UI script only.
+
 ### 2026-05-29 — admin-delete-meeting-and-logout
 
 Actor: Codex.

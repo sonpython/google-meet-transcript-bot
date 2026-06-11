@@ -1,5 +1,28 @@
 # Session Sync
 
+## 2026-06-01 — meet-speaker-activity-hints (backfilled 2026-06-11)
+
+Status: committed as `de715ed` and running in production; entry backfilled by Claude Code from git history.
+
+Code changes:
+
+- New `src/bot/speaker_activity_recorder.py` polls Meet UI for active speaker names during recording, writes timeline JSON beside the audio file (`speaker_timeline_path()`).
+- New `src/gemini/speaker_timeline.py` loads hints, merges adjacent segments, formats per-chunk hint text.
+- `Transcriber` appends chunk-scoped speaker hints to Gemini prompts; `transcribe_vn_v1.md` marks hints advisory-only (audio wins on conflict).
+- Plumbed via `meeting_session.py`, `recorder_supervisor.py`, `pipeline.py`, `main.py`, `reprocess_meeting.py`; `MeetingResult` gained timeline path field.
+- Tests added: `tests/test_speaker_activity_recorder.py` plus updates in pipeline/recorder/session tests.
+
+## 2026-05-31 / 2026-06-01 — pdf-export-title-and-metadata (backfilled 2026-06-11)
+
+Status: committed as `da12ac8` + `7bc8861` and running in production; entry backfilled by Claude Code from git history.
+
+Code changes (all in `src/health_server.py` admin UI script):
+
+- `meetingPdfTitle()` / `pdfDateStamp()`: PDF download title = doc type + meeting title + Meet code + start date stamp.
+- `stripPdfMetadata()` removes `## Generated ...` and `Meet code:` lines from exported markdown; Meet code rendered in PDF header line instead.
+- `jsArg()` helper for safely passing JS string args in inline onclick handlers.
+- `@page` print CSS suppresses browser headers/footers, adds centered page number.
+
 ## 2026-05-29 — admin-delete-meeting-and-logout
 
 Status: implemented, deployed to `192.168.1.120:/opt/meeting-assistant`, and verified healthy.
