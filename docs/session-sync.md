@@ -1,5 +1,34 @@
 # Session Sync
 
+## 2026-06-11 — bot-session-reauth-and-keepalive-alerting
+
+Status: implemented, deployed to `192.168.1.120:/opt/meeting-assistant`, and verified healthy (`bot_session_keepalive_ok`).
+
+Incident notes:
+
+- Session signed out since 2026-06-09 10:33 UTC; Google Workspace web-session policy expires after 14 days (`passive=1209600` in signin URL).
+- Headless password reauth lands on `signin/confirmidentifier` + verification challenge, unrecoverable without a human; keepalive retried every 15 min for ~2 days.
+- Re-auth pitfall: `$(ssh host "grep STORAGE_PASSPHRASE ...")` captured iTerm2 shell-integration escape sequences from the host shell, producing a 239-char contaminated passphrase → `InvalidToken` on the container. Extract with printf markers (`@@...@@` + sed) instead.
+- Restart pitfall: two quick `docker compose restart` runs left a stale PulseAudio pid file (`pa_pid_file_create() failed`) → crashloop. Use `docker compose up -d --force-recreate`.
+
+Code changes:
+
+- `src/bot/session_keepalive.py`: notifier support (`send_text`), alert on failed-reauth with 6h cooldown, recovery message, pause password reauth after `MAX_CONSECUTIVE_REAUTH_FAILURES=3` consecutive failures.
+- `src/main.py`: pass `discord_client or telegram_client` as keepalive notifier (bypasses `health_notify_enabled` gate; session-out is critical).
+- New `scripts/bot_reauth_local.py`: headed login, waits on `myaccount.google.com` host (not substring — `continue=` param contains it), validates SID cookie before saving encrypted state.
+- New `scripts/deploy-to-host.sh`: tar-pipe sync + `docker compose up -d --build`.
+- `docs/deployment.md`: re-auth runbook + permanent fix via Google Admin session control ("Session never expires" for bot OU).
+
+Verification:
+
+- `uv run pytest` -> 92 passed (4 new keepalive tests).
+- `uv run python -m compileall src tests` -> passed.
+- Deploy via `scripts/deploy-to-host.sh`; `bot_session_keepalive_ok` logged on new build; `/status` reports `state=running`.
+
+Open items:
+
+- Google Admin session-control change ("Session never expires" for the bot account OU) must be done manually in admin.google.com — not yet applied.
+
 ## 2026-06-01 — meet-speaker-activity-hints (backfilled 2026-06-11)
 
 Status: committed as `de715ed` and running in production; entry backfilled by Claude Code from git history.

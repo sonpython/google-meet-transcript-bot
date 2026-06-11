@@ -14,6 +14,25 @@ Google Meet transcript bot for Workspace meetings.
 
 ## Latest Session
 
+### 2026-06-11 — bot-session-reauth-and-keepalive-alerting
+
+Actor: Claude Code.
+
+Done:
+
+- Bot Google session expired 2026-06-09 (Workspace 14-day session policy, `passive=1209600`); headless reauth was stuck on "verify it's you" every 15 min for 2 days.
+- Re-authenticated via new `scripts/bot_reauth_local.py` (headed local login, auto-saves encrypted storageState when login completes, validates SID cookie).
+- Gotcha found: pulling `STORAGE_PASSPHRASE` via ssh command substitution captured iTerm shell-integration escape sequences → wrong encryption key; fixed by marker-based extraction and re-encrypting the state.
+- Gotcha found: fast double `docker compose restart` left a stale PulseAudio pid file → crashloop; `--force-recreate` fixes it.
+- Hardened `BotSessionKeepAlive`: Telegram/Discord alert on signed-out-with-failed-reauth (6h cooldown), recovery message, and reauth pause after 3 consecutive failures to stop hammering Google login.
+- Added `scripts/deploy-to-host.sh` wrapping the documented tar-pipe deploy.
+- Documented re-auth runbook + permanent fix (Google Admin session control → "Session never expires" for bot OU) in `docs/deployment.md`.
+
+Verification:
+
+- `uv run pytest` -> 92 passed.
+- Deployed to `192.168.1.120`; `bot_session_keepalive_ok` confirmed on new build.
+
 ### 2026-06-01 — meet-speaker-activity-hints
 
 Actor: backfilled by Claude Code on 2026-06-11 from git commit `de715ed` (author sonpython).
