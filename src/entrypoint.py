@@ -30,6 +30,8 @@ def _missing_runtime_inputs() -> list[str]:
         missing.append(f"TOKEN_STORE_PATH:{settings.token_store_path}")
     if not Path(settings.storage_state_path).exists():
         missing.append(f"STORAGE_STATE_PATH:{settings.storage_state_path}")
+    if not Path(settings.bot_user_data_dir).exists():
+        missing.append(f"BOT_USER_DATA_DIR:{settings.bot_user_data_dir}")
     return missing
 
 

@@ -1,11 +1,17 @@
-"""Headed bot re-login that auto-saves encrypted storageState once Google login completes.
+"""One-time headed login that populates the persistent Chromium profile.
 
 Usage:
-    STORAGE_PASSPHRASE=... uv run python scripts/bot_reauth_local.py --out /tmp/storage-state.fernet --expected-email bot@example.com
+    STORAGE_PASSPHRASE=... uv run python scripts/bot_persistent_login.py \
+        --user-data-dir /data/bot-profile \
+        --out /data/tokens/storage-state.fernet \
+        --expected-email bot@example.com
 
-Opens a visible Chromium window; log in as the bot account. The script detects
-arrival at myaccount.google.com and saves the encrypted storage state, no
-manual Enter needed (unlike bot_first_login_manual.py).
+Opens a visible Chromium window backed by the on-disk profile at --user-data-dir.
+Log in as the bot account once; everything (cookies, localStorage, IndexedDB,
+device id) is written into that profile dir, which the keepalive then reopens
+headless to keep warm -- no password is ever typed again. The script also exports
+an encrypted storageState snapshot to --out so the meeting flow's ephemeral
+contexts have signed-in cookies immediately, before the first keepalive cycle.
 """
 
 import argparse
@@ -24,6 +30,7 @@ EMAIL_URL = "https://myaccount.google.com/email"
 
 
 async def _run(
+    user_data_dir: Path,
     out_path: Path,
     passphrase: str,
     timeout_minutes: int,
@@ -31,10 +38,13 @@ async def _run(
     auto_password: str | None,
 ) -> int:
     store = StorageStateStore(out_path, passphrase)
+    user_data_dir.mkdir(parents=True, exist_ok=True)
     playwright = await async_playwright().start()
-    browser = await playwright.chromium.launch(headless=False)
-    context = await browser.new_context()
-    page = await context.new_page()
+    context = await playwright.chromium.launch_persistent_context(
+        str(user_data_dir),
+        headless=False,
+    )
+    page = context.pages[0] if context.pages else await context.new_page()
     try:
         await page.goto(_login_url(expected_email), wait_until="domcontentloaded")
         print("Log in as the bot account in the opened browser window...", flush=True)
@@ -56,16 +66,16 @@ async def _run(
             return 1
         if expected_email and not await _verify_expected_email(page, expected_email):
             print(
-                f"Logged-in Google account is not {expected_email}; refusing to save storage state.",
+                f"Logged-in Google account is not {expected_email}; refusing to save state.",
                 file=sys.stderr,
             )
             return 1
         store.save(state)
-        print(f"Saved encrypted storage state to {out_path}", flush=True)
+        print(f"Persistent profile ready at {user_data_dir}", flush=True)
+        print(f"Saved encrypted storage state snapshot to {out_path}", flush=True)
         return 0
     finally:
         await context.close()
-        await browser.close()
         await playwright.stop()
 
 
@@ -117,7 +127,16 @@ def _login_url(expected_email: str | None) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", required=True, help="Output path for encrypted storage state")
+    parser.add_argument(
+        "--user-data-dir",
+        default=os.environ.get("BOT_USER_DATA_DIR", "/data/bot-profile"),
+        help="On-disk Chromium profile dir to populate (kept warm by the keepalive)",
+    )
+    parser.add_argument(
+        "--out",
+        default=os.environ.get("STORAGE_STATE_PATH", "/data/tokens/storage-state.fernet"),
+        help="Output path for the encrypted storageState snapshot used by meetings",
+    )
     parser.add_argument("--timeout-minutes", type=int, default=10)
     parser.add_argument(
         "--expected-email",
@@ -137,7 +156,14 @@ def main() -> None:
     auto_password = os.environ.get("BOT_PASSWORD") if args.auto_password else None
     sys.exit(
         asyncio.run(
-            _run(Path(args.out), passphrase, args.timeout_minutes, args.expected_email, auto_password)
+            _run(
+                Path(args.user_data_dir),
+                Path(args.out),
+                passphrase,
+                args.timeout_minutes,
+                args.expected_email,
+                auto_password,
+            )
         )
     )
 

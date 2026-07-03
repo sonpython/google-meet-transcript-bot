@@ -53,11 +53,20 @@ uv run pytest
 uv run python -m compileall src tests
 ```
 
-Run first-time bot browser login and save encrypted Playwright storage state:
+Run the one-time bot browser login. This populates the persistent Chromium
+profile (`BOT_USER_DATA_DIR`, kept warm by the keepalive) and saves an encrypted
+storageState snapshot for the meeting flow:
 
 ```bash
-uv run python scripts/bot_first_login.py
+STORAGE_PASSPHRASE=... uv run python scripts/bot_persistent_login.py \
+  --user-data-dir "$BOT_USER_DATA_DIR" \
+  --out "$STORAGE_STATE_PATH" \
+  --expected-email "$BOT_EMAIL"
 ```
+
+The keepalive then reopens this profile headless every few minutes (see
+`BOT_SESSION_KEEPALIVE_INTERVAL_SECONDS`, default 300) so cookies/session/keys
+rotate naturally like a real user — no automated password re-login.
 
 Run the watcher after configuring `.env` and `client_secrets.json`:
 
@@ -90,7 +99,7 @@ curl -H "X-API-Key: $ADMIN_TOKEN" \
   "https://meet-assistant.example.com/api/meetings/abc-defg-hij"
 ```
 
-The first Calendar OAuth run opens a browser and stores the refresh token encrypted at `TOKEN_STORE_PATH`. The bot account login is separate and uses `scripts/bot_first_login.py`.
+The first Calendar OAuth run opens a browser and stores the refresh token encrypted at `TOKEN_STORE_PATH`. The bot account login is separate and uses `scripts/bot_persistent_login.py`.
 
 ## Required Accounts And Secrets
 

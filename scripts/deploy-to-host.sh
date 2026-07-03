@@ -3,7 +3,7 @@
 # Mirrors the Deploy Command documented in docs/deployment.md.
 set -euo pipefail
 
-HOST="${DEPLOY_HOST:-root@192.168.1.120}"
+HOST="${DEPLOY_HOST:-root@192.168.1.160}"
 DEST="${DEPLOY_PATH:-/opt/meeting-assistant}"
 
 cd "$(dirname "$0")/.."

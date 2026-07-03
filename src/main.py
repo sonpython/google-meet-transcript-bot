@@ -142,7 +142,11 @@ async def main() -> None:
     credentials = auth.get_credentials()
     calendar_client = CalendarClient(credentials, settings.calendar_id)
     repo = MeetingsRepo(connect(settings.db_path))
-    browser_factory = BrowserSessionFactory(storage_store, headless=settings.bot_headless)
+    browser_factory = BrowserSessionFactory(
+        storage_store,
+        headless=settings.bot_headless,
+        user_data_dir=settings.bot_user_data_dir,
+    )
     # Session-out alerts are critical (bot misses meetings), so they bypass the
     # health_notify_enabled gate used for routine daily checks.
     keepalive_notifier = discord_client or telegram_client
@@ -150,7 +154,6 @@ async def main() -> None:
         browser_factory,
         storage_store,
         settings.bot_email,
-        settings.bot_password,
         notifier=keepalive_notifier,
     )
     result_processor = _build_result_processor(settings)

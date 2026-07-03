@@ -33,8 +33,12 @@ class Settings(BaseSettings):
     bot_headless: bool = Field(default=True)
     storage_state_path: Path = Field(default=Path("/data/tokens/storage-state.fernet"))
     storage_passphrase: str | None = Field(default=None)
+    # On-disk Chromium profile kept warm by the keepalive. Holds the full real
+    # browser session (cookies, localStorage, IndexedDB, device id) so Google
+    # treats it like a returning user instead of a fresh datacenter sign-in.
+    bot_user_data_dir: Path = Field(default=Path("/data/bot-profile"))
     bot_session_keepalive_enabled: bool = Field(default=True)
-    bot_session_keepalive_interval_seconds: int = Field(default=900, ge=60)
+    bot_session_keepalive_interval_seconds: int = Field(default=300, ge=60)
     test_meet_code: str | None = Field(default=None)
 
     gemini_api_key: str | None = Field(default=None)
