@@ -89,42 +89,60 @@ docker compose restart meeting-assistant
 
 ## Bot Google Session Re-Auth
 
-The keepalive keeps the bot logged in by reopening a persistent Chromium
-profile (`BOT_USER_DATA_DIR`) headless every few minutes, so cookies/session
-keys rotate naturally like a real user — it never types a password. A signed-out
-profile (e.g. policy-forced logout) cannot self-recover; the keepalive job sends
-a Telegram/Discord alert and waits for a human to re-run the one-time login.
+The keepalive reopens the persistent Chromium profile (`BOT_USER_DATA_DIR`)
+headless every 15 minutes so cookies rotate naturally like a real user - it
+never types a password. The Workspace edition has no Google session control
+(Business Plus+ only), so the web session hard-expires 14 days after the last
+authentication regardless of keepalive activity.
 
-To restore the session from a workstation:
+### Automatic self-heal (primary path)
+
+Root's crontab on the Docker host runs `scripts/bot-session-auto-relogin.sh`
+daily at 21:30 UTC (04:30 Asia/Saigon):
+
+- Session still valid: the login script reaches myaccount without typing a
+  password (no-op, refreshes the storageState snapshot).
+- Session expired: it performs the single password login that restores it -
+  once per ~14 days, from the host's own residential IP.
+- Three failed attempts (60s apart, covers keepalive profile-lock collisions):
+  Telegram alert, human takes over. Log: `/opt/meeting-assistant/data/auto-relogin.log`.
+
+### Manual recovery (when the cron alert fires)
+
+Log in **in-container** so cookies are device-bound to the host - never push a
+Mac-created profile or storageState snapshot to the host (device-bound cookies
+such as LSID/SIDCC/PSIDTS do not survive the transplant and the container ends
+up fully signed out):
 
 ```bash
-# 1. Headed login into a fresh persistent profile + storageState snapshot.
-#    Get STORAGE_PASSPHRASE from /opt/meeting-assistant/.env on the host.
-#    Beware: command substitution over ssh can capture terminal escape
-#    sequences from the host shell — copy the value manually if unsure.
-STORAGE_PASSPHRASE=... PYTHONPATH=. \
-  uv run python scripts/bot_persistent_login.py \
-    --user-data-dir /tmp/bot-profile \
-    --out /tmp/storage-state.fernet \
-    --expected-email "$BOT_EMAIL"
-
-# 2. Deploy and recreate (restart alone can leave a stale PulseAudio pid file).
-ssh root@192.168.1.160 "cp /opt/meeting-assistant/data/tokens/storage-state.fernet /opt/meeting-assistant/data/tokens/storage-state.fernet.bak"
-ssh root@192.168.1.160 "rm -rf /opt/meeting-assistant/data/bot-profile"
-scp /tmp/storage-state.fernet root@192.168.1.160:/opt/meeting-assistant/data/tokens/storage-state.fernet
-scp -r /tmp/bot-profile root@192.168.1.160:/opt/meeting-assistant/data/bot-profile
-ssh root@192.168.1.160 "cd /opt/meeting-assistant && docker compose up -d --force-recreate meeting-assistant"
-
-# 3. Verify: wait for bot_session_keepalive_ok in logs.
+ssh root@192.168.1.160 "docker exec -e PYTHONPATH=/app meeting-assistant \
+  xvfb-run -a python scripts/bot_persistent_login.py --auto-password --timeout-minutes 8"
 ```
 
-A persistent profile is somewhat OS/Chromium-version specific. If a profile
-created on a macOS workstation misbehaves on the Linux host, run
-`bot_persistent_login.py` on the host itself (headed X/VNC session) so the
-profile is created in the same environment that later opens it headless. The
-storageState snapshot (`--out`) is cross-platform and always feeds the meeting
-flow regardless.
+If that hits a Google challenge, first lower the account risk score with a
+headed login from a workstation on the same home network (throwaway local
+profile; secrets loaded literally from a copy of the host `.env` - do not
+ssh-command-substitute `STORAGE_PASSPHRASE`, terminal escapes corrupt it):
 
-Permanent fix: in Google Admin console (Security → Google session control),
-set the bot account's OU web session duration to "Session never expires" so
-the 14-day expiry stops logging the bot out.
+```bash
+PYTHONPATH=. STORAGE_PASSPHRASE=... BOT_EMAIL=... BOT_PASSWORD=... \
+  uv run python scripts/bot_persistent_login.py --auto-password \
+    --user-data-dir /tmp/mac-bot-profile --out /tmp/mac-storage-state.fernet
+```
+
+then re-run the in-container command; password-only login passes once the risk
+score drops. Verify with `bot_session_keepalive_ok` in container logs. Backup
+before recovery attempts:
+
+```bash
+ssh root@192.168.1.160 "cd /opt/meeting-assistant/data && \
+  cp tokens/storage-state.fernet tokens/storage-state.fernet.bak-$(date +%y%m%d) && \
+  tar czf bot-profile.bak-$(date +%y%m%d).tgz bot-profile"
+```
+
+### Version pin
+
+`pyproject.toml` pins `playwright==1.60.0` to match the Dockerfile base image
+`mcr.microsoft.com/playwright/python:v1.60.0-noble`. Bump both together - a
+floating `>=` pin once pulled 1.61.0 into a v1.60.0 image and Chromium could
+not launch after the next container recreate.
