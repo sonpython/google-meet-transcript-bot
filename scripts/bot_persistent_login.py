@@ -93,7 +93,11 @@ async def _try_auto_login(page, email: str, password: str) -> None:
     try:
         email_input = page.locator('input[type="email"], #identifierId').first
         if await email_input.count():
-            await email_input.fill(email)
+            # Google's confirmidentifier page pre-fills the identifier in a
+            # hidden input; filling it hangs. Only type when the field is
+            # actually visible, otherwise just confirm with Next.
+            if await email_input.is_visible():
+                await email_input.fill(email)
             await _click_next(page)
         password_input = page.locator('input[type="password"]').first
         await password_input.wait_for(state="visible", timeout=20_000)
