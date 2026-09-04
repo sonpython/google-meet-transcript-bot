@@ -111,6 +111,17 @@ def test_unknown_user_id_errors(db_path: Path) -> None:
 def test_users_page_has_no_secret_material() -> None:
     page = admin_users.page_html()
     assert "password_hash" not in page and "api_key_hash" not in page
+    assert "mak_" not in page
+
+
+def test_users_page_offers_mcp_client_snippets() -> None:
+    # After rotating a key the panel shows copy-ready client setups; the
+    # snippets are built client-side from the one-time key, never server-side.
+    page = admin_users.page_html()
+    assert "claude mcp add --transport http meeting-assistant" in page
+    assert "[mcp_servers.meeting-assistant]" in page
+    assert "bearer_token" in page
+    assert "showKeyPanel" in page
 
 
 @pytest.fixture

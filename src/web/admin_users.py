@@ -127,6 +127,8 @@ def page_html() -> str:
 <input id="newPassword" placeholder="Temp password (min 10)" autocomplete="off">
 <button onclick="createUser()">Create</button>
 </div></section>
+<section id="keyPanel" class="panel" style="display:none"><div class="panel-head"><h2>API key for <span id="keyEmail"></span> (shown once, copy now)</h2><button onclick="hideKeyPanel()">Close</button></div>
+<div id="keyBlocks" style="padding:12px 14px;display:flex;flex-direction:column;gap:12px"></div></section>
 <section class="panel"><div class="panel-head"><h2>All users</h2><span id="msg" class="muted" aria-live="polite"></span></div>
 <div id="users" style="padding:12px 14px"></div></section>
 </main>
@@ -141,13 +143,29 @@ async function loadUsers(){const d=await api('users'); document.getElementById('
 `<tr><th align="left">Email</th><th align="left">Name</th><th>Admin</th><th>Active</th><th>Password</th><th>API key</th><th align="left">Actions</th></tr>`+
 d.users.map(u=>`<tr style="border-top:1px solid #263244"><td>${esc(u.email)}</td><td>${esc(u.display_name||'')}</td><td align="center">${u.is_admin?'yes':''}</td><td align="center">${u.is_active?'yes':'no'}</td><td align="center">${u.has_password?'set':'-'}</td><td align="center">${u.has_api_key?'set':'-'}</td><td>
 <button onclick="resetPassword(${u.id})">Reset pw</button>
-<button onclick="rotateKey(${u.id})">New API key</button>
+<button onclick="rotateKey(${u.id},'${esc(u.email)}')">New API key</button>
 ${u.has_api_key?`<button onclick="revokeKey(${u.id})">Revoke key</button>`:''}
 <button class="danger" onclick="setActive(${u.id},${u.is_active?'false':'true'})">${u.is_active?'Deactivate':'Activate'}</button>
 </td></tr>`).join('')+`</table>`;}
 async function createUser(){const email=document.getElementById('newEmail').value.trim(); const name=document.getElementById('newName').value.trim(); const pw=document.getElementById('newPassword').value; try{await api('users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,display_name:name,password:pw})}); say('User created'); for(const id of ['newEmail','newName','newPassword'])document.getElementById(id).value=''; await loadUsers();}catch(e){say('Error: '+e.message);}}
 async function resetPassword(id){const pw=prompt('New temp password (min 10 chars):'); if(!pw)return; try{await api(`users/${id}/password`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})}); say('Password set');}catch(e){say('Error: '+e.message);}}
-async function rotateKey(id){try{const d=await api(`users/${id}/rotate-key`,{method:'POST'}); prompt('API key (shown once, copy now):',d.api_key); await loadUsers();}catch(e){say('Error: '+e.message);}}
+async function rotateKey(id,email){try{const d=await api(`users/${id}/rotate-key`,{method:'POST'}); showKeyPanel(email,d.api_key); await loadUsers();}catch(e){say('Error: '+e.message);}}
+function copyBlock(title,content){return `<div class="code-block"><div class="code-head"><h3>${esc(title)}</h3><button onclick="copyText(this)">Copy</button></div><pre style="max-height:160px">${esc(content)}</pre></div>`;}
+async function copyText(btn){const text=btn.closest('.code-block').querySelector('pre').textContent; try{await navigator.clipboard.writeText(text);}catch{const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();} btn.textContent='Copied'; setTimeout(()=>btn.textContent='Copy',1500);}
+function showKeyPanel(email,key){const mcpUrl=location.origin+'/mcp';
+const claudeCode=`claude mcp add --transport http meeting-assistant ${mcpUrl} --header "Authorization: Bearer ${key}"`;
+const codex=`# ~/.codex/config.toml\n[mcp_servers.meeting-assistant]\nurl = "${mcpUrl}"\nbearer_token = "${key}"`;
+const rest=`curl -H "Authorization: Bearer ${key}" "${location.origin}/api/meetings?limit=5"`;
+document.getElementById('keyEmail').textContent=email;
+document.getElementById('keyBlocks').innerHTML=[
+ copyBlock('API key',key),
+ copyBlock('Claude Code (one command)',claudeCode),
+ copyBlock('Codex CLI (append to config)',codex),
+ copyBlock('REST example',rest),
+].join('')+'<span class="muted">The key is stored hashed on the server and cannot be shown again. Rotate to replace it.</span>';
+document.getElementById('keyPanel').style.display='';
+document.getElementById('keyPanel').scrollIntoView({behavior:'smooth'});}
+function hideKeyPanel(){document.getElementById('keyPanel').style.display='none'; document.getElementById('keyBlocks').innerHTML='';}
 async function revokeKey(id){if(!confirm('Revoke this API key?'))return; try{await api(`users/${id}/revoke-key`,{method:'POST'}); say('Key revoked'); await loadUsers();}catch(e){say('Error: '+e.message);}}
 async function setActive(id,active){try{await api(`users/${id}/active`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({active})}); await loadUsers();}catch(e){say('Error: '+e.message);}}
 loadUsers();
