@@ -1,7 +1,7 @@
 ---
 title: "MCP transcript access + multi-user system"
 description: "Per-user login and API keys, bot-invite calendar model, and a FastMCP streamable HTTP server exposing transcript tools."
-status: in_progress
+status: completed
 priority: P2
 effort: 16h
 branch: main
@@ -22,7 +22,7 @@ Source of truth for design: `plans/reports/brainstorm-260904-1216-mcp-multi-user
 | 03 | [Web login and user pages](phase-03-web-login-and-user-pages.md) | 4h | done | 02 |
 | 04 | [Calendar bot-invite switch](phase-04-calendar-bot-invite-switch.md) | 1.5h | done | - |
 | 05 | [MCP server and tools](phase-05-mcp-server-and-tools.md) | 3h | done | 01, 02 |
-| 06 | [Deployment wiring and docs](phase-06-deployment-wiring-and-docs.md) | 2h | code done, deploy pending | 03, 04, 05 |
+| 06 | [Deployment wiring and docs](phase-06-deployment-wiring-and-docs.md) | 2h | done (deploy verified; calendar OAuth re-run pending, user action) | 03, 04, 05 |
 
 Phase 04 is independent of 01-03 by data flow but touches `src/health_server.py` (2 lines), so run it either before 02 or after 03, never concurrently with them.
 

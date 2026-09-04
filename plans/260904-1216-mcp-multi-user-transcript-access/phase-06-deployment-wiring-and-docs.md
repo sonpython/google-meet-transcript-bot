@@ -12,7 +12,7 @@
 ## Overview
 
 - Priority: P2
-- Status: code done, deploy pending
+- Status: done (deployed 2026-09-04; calendar OAuth re-run as BOT_EMAIL pending, user action)
 - Effort: 2h
 - Starts and supervises the MCP process inside the existing container, publishes 18081 on the host loopback, adds the tunnel route, and updates every doc the change touches.
 
@@ -107,7 +107,7 @@ Tests:
 - [x] `README.md` multi-user, REST, MCP, runtime flow
 - [x] `docs/deployment.md` port, tunnel rule, cutover runbook, admin bootstrap
 - [x] `tests/test_mcp_supervisor.py`
-- [ ] Deploy and run the smoke checks
+- [x] Deploy and run the smoke checks (healthz 200, MCP 401 no-key, tunnel /mcp routed, initialize + list_meetings OK with personal key)
 - [x] Full test suite green
 
 ## Test Matrix
