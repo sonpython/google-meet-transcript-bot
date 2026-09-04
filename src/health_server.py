@@ -1,15 +1,15 @@
 import json
 import os
-import re
 import subprocess
 from datetime import UTC, datetime, timedelta
-from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from sqlite3 import Row
 from urllib.parse import parse_qs, unquote, urlparse
 
 from src.auth.oauth_user import OAuthUserAuth
+from src.auth.request_auth import authenticate
+from src.web.styles import CSS
 from src.auth.token_store import TokenStore
 from src.calendar_watcher.classifier import to_meeting_event
 from src.calendar_watcher.client import CalendarClient
@@ -17,7 +17,20 @@ from src.config import load_settings
 from src.models.meeting_event import MeetingEvent
 from src.runtime_status import STATUS
 from src.state.db import connect
+from src.state.meeting_queries import (
+    bounded_int as _bounded_int,
+    decode_attendees as _decode_attendees,
+    first_param as _first_param,
+    meeting_filter_sql as _meeting_filter_sql,
+    normalize_meet_code as _normalize_meet_code,
+    path_or_none as _path_or_none,
+    range_boundary as _range_boundary,
+    resolve_meeting_paths as _meeting_paths,
+    truthy as _truthy,
+)
 from src.state.meetings_repo import TERMINAL_STATUSES, MeetingsRepo
+from src.web import admin_users
+from src.web.user_routes import ROUTES as USER_WEB_ROUTES, handle as _handle_user_route
 
 
 class AdminHTTPServer(ThreadingHTTPServer):
@@ -31,9 +44,21 @@ class AdminHandler(BaseHTTPRequestHandler):
         if parsed.path in ("/", "/status", "/healthz"):
             self._send_json(STATUS.snapshot())
             return
+        if self._dispatch_user_route(parsed, "GET"):
+            return
+        if parsed.path == "/admin/users":
+            if not self._is_authorized(parsed):
+                self._send_html(_login_html())
+                return
+            if not self._require_admin():
+                return
+            self._send_html(admin_users.page_html())
+            return
         if parsed.path == "/admin":
             if not self._is_authorized(parsed):
                 self._send_html(_login_html())
+                return
+            if not self._require_admin():
                 return
             self._send_html(_admin_html())
             return
@@ -41,16 +66,22 @@ class AdminHandler(BaseHTTPRequestHandler):
             if not self._is_authorized(parsed):
                 self._send_html(_login_html())
                 return
+            if not self._require_admin():
+                return
             self._send_html(_settings_html())
             return
         if parsed.path.startswith("/admin/api/"):
             if not self._is_authorized(parsed):
                 self._send_json({"error": "unauthorized"}, status=401)
                 return
+            if not self._require_admin():
+                return
             self._handle_api(parsed)
             return
         if parsed.path.startswith("/api/"):
-            if not self._is_authorized(parsed, allow_cookie=False):
+            # Session cookies are accepted here so the /app page JS can call
+            # /api/* directly; the surface stays GET only.
+            if not self._is_authorized(parsed, allow_cookie=True):
                 self._send_json({"error": "unauthorized"}, status=401)
                 return
             self._handle_public_api(parsed)
@@ -59,6 +90,8 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if self._dispatch_user_route(parsed, "POST"):
+            return
         if parsed.path == "/admin/login":
             self._handle_login()
             return
@@ -69,12 +102,68 @@ class AdminHandler(BaseHTTPRequestHandler):
             if not self._is_authorized(parsed):
                 self._send_json({"error": "unauthorized"}, status=401)
                 return
+            if not self._require_admin():
+                return
             self._handle_api_post(parsed)
             return
         if parsed.path.startswith("/api/"):
             self._send_json({"error": "method not allowed"}, status=405)
             return
         self.send_error(404)
+
+    def _handle_users_post(self, suffix: str) -> None:
+        db_path = load_settings().db_path
+        try:
+            if suffix == "users":
+                self._send_json(admin_users.create_user(db_path, self._read_json_body()))
+                return
+            parts = suffix.split("/")
+            if len(parts) == 3 and parts[1].isdigit():
+                user_id = int(parts[1])
+                if parts[2] == "password":
+                    self._send_json(admin_users.set_password(db_path, user_id, self._read_json_body()))
+                    return
+                if parts[2] == "rotate-key":
+                    self._send_json(admin_users.rotate_key(db_path, user_id))
+                    return
+                if parts[2] == "revoke-key":
+                    self._send_json(admin_users.revoke_key(db_path, user_id))
+                    return
+                if parts[2] == "active":
+                    self._send_json(admin_users.set_active(db_path, user_id, self._read_json_body()))
+                    return
+            self._send_json({"error": "not found"}, status=404)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=500)
+
+    def _dispatch_user_route(self, parsed, method: str) -> bool:
+        if parsed.path not in USER_WEB_ROUTES:
+            return False
+        settings = load_settings()
+        body = b""
+        if method == "POST":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = self.rfile.read(length) if length > 0 else b""
+        context = authenticate(
+            headers=self.headers,
+            query=parsed.query,
+            admin_token=settings.admin_token or "",
+            db_path=settings.db_path,
+            allow_cookie=True,
+        )
+        response = _handle_user_route(method, parsed.path, self.headers, body, context, settings.db_path)
+        if response is None:
+            return False
+        self.send_response(response.status)
+        self.send_header("Content-Type", response.content_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(response.body)))
+        for key, value in response.headers:
+            self.send_header(key, value)
+        self.end_headers()
+        if response.body:
+            self.wfile.write(response.body)
+        return True
 
     def _handle_login(self) -> None:
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -121,6 +210,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 self._send_json({"meeting": _meeting_detail(unquote(suffix.removeprefix("meetings/")))})
             elif suffix == "upcoming":
                 self._send_json({"events": _upcoming_events()})
+            elif suffix == "users":
+                self._send_json(admin_users.list_users(load_settings().db_path))
             else:
                 self._send_json({"error": "not found"}, status=404)
         except Exception as exc:
@@ -149,6 +240,9 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def _handle_api_post(self, parsed) -> None:
         suffix = parsed.path.removeprefix("/admin/api/")
+        if suffix == "users" or suffix.startswith("users/"):
+            self._handle_users_post(suffix)
+            return
         if suffix == "manual-join":
             self._send_json(_request_manual_join(self._read_json_body()))
             return
@@ -178,27 +272,23 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "not found"}, status=404)
 
     def _is_authorized(self, parsed, allow_cookie: bool = True) -> bool:
-        expected = load_settings().admin_token
-        if not expected:
-            return False
-        auth = self.headers.get("Authorization", "")
-        if auth.startswith("Bearer ") and auth.removeprefix("Bearer ").strip() == expected:
+        settings = load_settings()
+        self.auth_context = authenticate(
+            headers=self.headers,
+            query=parsed.query,
+            admin_token=settings.admin_token or "",
+            db_path=settings.db_path,
+            allow_cookie=allow_cookie,
+        )
+        return self.auth_context is not None
+
+    def _require_admin(self) -> bool:
+        # /admin/* stays admin-only now that regular user API keys pass
+        # _is_authorized; a valid but non-admin identity gets 403, not 401.
+        context = getattr(self, "auth_context", None)
+        if context is not None and context.is_admin:
             return True
-        if self.headers.get("X-API-Key", "").strip() == expected:
-            return True
-        if self.headers.get("X-Admin-Token", "").strip() == expected:
-            return True
-        query_token = parse_qs(parsed.query).get("token", [""])[0]
-        if query_token == expected:
-            return True
-        if not allow_cookie:
-            return False
-        raw_cookie = self.headers.get("Cookie", "")
-        if raw_cookie:
-            parsed_cookie = cookies.SimpleCookie(raw_cookie)
-            morsel = parsed_cookie.get("admin_token")
-            if morsel and morsel.value == expected:
-                return True
+        self._send_json({"error": "forbidden"}, status=403)
         return False
 
     def _send_json(self, payload, status: int = 200) -> None:
@@ -341,41 +431,6 @@ def _count_meetings(params: dict[str, list[str]]) -> int:
         conn.close()
 
 
-def _meeting_filter_sql(params: dict[str, list[str]]) -> tuple[str, tuple]:
-    clauses = []
-    values: list[str] = []
-    title = _first_param(params, "title") or _first_param(params, "name") or _first_param(params, "q")
-    if title:
-        clauses.append("LOWER(title) LIKE ?")
-        values.append(f"%{title.lower()}%")
-    code = _first_param(params, "meet_code") or _first_param(params, "code")
-    if code:
-        meet_code = _normalize_meet_code(code)
-        if not meet_code:
-            raise ValueError("invalid Meet code")
-        clauses.append("meet_code = ?")
-        values.append(meet_code)
-    status = _first_param(params, "status")
-    if status:
-        clauses.append("status = ?")
-        values.append(status)
-    start_from = _range_boundary(
-        _first_param(params, "from") or _first_param(params, "start_from") or _first_param(params, "date_from"),
-        end=False,
-    )
-    start_to = _range_boundary(
-        _first_param(params, "to") or _first_param(params, "start_to") or _first_param(params, "date_to"),
-        end=True,
-    )
-    if start_from:
-        clauses.append("scheduled_start_utc >= ?")
-        values.append(start_from)
-    if start_to:
-        clauses.append("scheduled_start_utc <= ?")
-        values.append(start_to)
-    return ("WHERE " + " AND ".join(clauses) if clauses else "", tuple(values))
-
-
 def _api_meeting_payload(meeting: dict, include_content: bool = False) -> dict:
     detail = meeting if "files" in meeting else _meeting_detail(str(meeting["meet_code"]))
     files = detail.get("files", {})
@@ -424,39 +479,8 @@ def _public_file_payload(file_payload: dict, include_content: bool) -> dict:
 
 
 def _api_filter_echo(params: dict[str, list[str]]) -> dict:
-    keys = ("q", "title", "name", "meet_code", "code", "status", "from", "to", "start_from", "start_to", "date_from", "date_to")
+    keys = ("q", "title", "name", "meet_code", "code", "status", "attendee", "from", "to", "start_from", "start_to", "date_from", "date_to")
     return {key: _first_param(params, key) for key in keys if _first_param(params, key)}
-
-
-def _first_param(params: dict[str, list[str]], key: str) -> str:
-    values = params.get(key) or []
-    return values[0].strip() if values and values[0] is not None else ""
-
-
-def _bounded_int(value: str, default: int, minimum: int, maximum: int) -> int:
-    if not value:
-        return default
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError("limit/offset must be integers") from exc
-    return min(max(parsed, minimum), maximum)
-
-
-def _truthy(value: str) -> bool:
-    return value.lower() in {"1", "true", "yes", "on"}
-
-
-def _range_boundary(value: str, end: bool) -> str:
-    if not value:
-        return ""
-    raw = value.strip()
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
-        return f"{raw}T23:59:59.999999" if end else f"{raw}T00:00:00"
-    try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
-    except ValueError as exc:
-        raise ValueError(f"invalid date/time filter: {raw}") from exc
 
 
 def _meeting_detail(meet_code: str, include_audio_peaks: bool = False, audio_mode: str = "default") -> dict:
@@ -681,14 +705,6 @@ def _request_regenerate_transcript(meet_code: str) -> dict:
         conn.close()
 
 
-def _normalize_meet_code(value: str) -> str | None:
-    raw = value.strip().lower()
-    match = re.search(r"([a-z]{3})-?([a-z]{4})-?([a-z]{3})", raw)
-    if not match:
-        return None
-    return "-".join(match.groups())
-
-
 def _find_calendar_meeting(meet_code: str, settings) -> MeetingEvent | None:
     try:
         token_store = TokenStore(settings.token_store_path, settings.token_passphrase)
@@ -698,7 +714,7 @@ def _find_calendar_meeting(meet_code: str, settings) -> MeetingEvent | None:
             raw_code = _event_meet_code(raw)
             if raw_code != meet_code:
                 continue
-            return to_meeting_event(raw, settings.user_email) or _calendar_event_to_meeting(raw, meet_code)
+            return to_meeting_event(raw, settings.bot_email) or _calendar_event_to_meeting(raw, meet_code)
     except Exception:
         return None
     return None
@@ -770,26 +786,6 @@ def _update_audio_retention(payload: dict) -> dict:
         return {"ok": True, "settings": {"audio_retention_days": days}}
     finally:
         conn.close()
-
-
-def _meeting_paths(meeting: dict) -> dict[str, Path | None]:
-    paths: dict[str, Path | None] = {
-        "audio": _path_or_none(meeting.get("audio_path")),
-        "transcript": _path_or_none(meeting.get("transcript_path")),
-        "summary": _path_or_none(meeting.get("summary_path")),
-        "minutes": _path_or_none(meeting.get("minutes_path")),
-        "notes": _path_or_none(meeting.get("notes_path")),
-    }
-    notes = paths["notes"]
-    if paths["notes"] and paths["transcript"] and paths["notes"] == paths["transcript"]:
-        paths["notes"] = None
-        notes = None
-    if notes and notes.name.startswith("meeting-notes-"):
-        slug = notes.name.removeprefix("meeting-notes-").removesuffix(".md")
-        paths["transcript"] = paths["transcript"] or notes.with_name(f"transcript-{slug}.md")
-        paths["summary"] = paths["summary"] or notes.with_name(f"summary-{slug}.md")
-        paths["minutes"] = paths["minutes"] or notes.with_name(f"meeting-minutes-{slug}.md")
-    return paths
 
 
 def _audio_mode(parsed) -> str:
@@ -948,7 +944,7 @@ def _upcoming_events() -> list[dict]:
     try:
         repo = MeetingsRepo(conn)
         for raw in client.list_upcoming(settings.calendar_lookahead_minutes):
-            meeting = to_meeting_event(raw, settings.user_email)
+            meeting = to_meeting_event(raw, settings.bot_email)
             raw_meet_code = _event_meet_code(raw)
             stored = repo.get(meeting.meet_code if meeting else raw_meet_code) if (meeting or raw_meet_code) else None
             stored_status = stored["status"] if stored else None
@@ -976,24 +972,6 @@ def _row_to_dict(row) -> dict:
     if "attendees" in data:
         data["attendees"] = _decode_attendees(data.get("attendees"))
     return data
-
-
-def _decode_attendees(value) -> list[str]:
-    if not value:
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value]
-    try:
-        parsed = json.loads(value)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return [str(value)]
-    if isinstance(parsed, list):
-        return [str(item) for item in parsed]
-    return []
-
-
-def _path_or_none(value: str | None) -> Path | None:
-    return Path(value) if value else None
 
 
 def _json_default(value):
@@ -1035,20 +1013,7 @@ def _settings_html() -> str:
 
 
 def _style() -> str:
-    return """<style>
-*{box-sizing:border-box}body{margin:0;background:#070b12;color:#e5e7eb;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;color-scheme:dark;-webkit-tap-highlight-color:transparent}
-header{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#0b1220;color:#f8fafc;border-bottom:1px solid #1f2937}.header-actions,.panel-actions{display:flex;align-items:center;gap:8px}
-h1,h2,h3{margin:0} h1{font-size:18px} h2{font-size:15px}
-main{padding:18px;display:flex;flex-direction:column;gap:16px}.grid{display:grid;grid-template-columns:minmax(420px,2fr) minmax(520px,3fr);gap:16px}
-.panel{background:#0f172a;border:1px solid #263244;border-radius:8px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.28)}.panel h2,.panel-head{padding:12px 14px;border-bottom:1px solid #263244}.panel-head{display:flex;align-items:center;justify-content:space-between}.history-panel.locked .filters,.history-panel.locked .pagination{pointer-events:none;opacity:.55}
-button,input,textarea,.button-link{border:1px solid #334155;background:#182235;color:#e5e7eb;border-radius:6px;touch-action:manipulation}button,input,.button-link{height:32px;padding:0 10px}textarea{width:100%;min-height:96px;padding:10px;resize:vertical;font:inherit;line-height:1.45}button{cursor:pointer}button:hover,.button-link:hover{background:#22304a;border-color:#475569}button.danger{background:#451a1a;border-color:#7f1d1d;color:#fecaca}button.danger:hover{background:#5f1d1d;border-color:#991b1b}button:focus-visible,input:focus-visible,textarea:focus-visible,.button-link:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}.button-link{display:inline-flex;align-items:center;text-decoration:none}input::placeholder,textarea::placeholder{color:#64748b}.history-tools{padding:12px 14px;border-bottom:1px solid #263244}.manual-join{display:grid;grid-template-columns:minmax(180px,1fr) auto;gap:8px;align-items:center;width:min(40%,460px);min-width:320px}.manual-join input{width:100%}.service-status{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 9px;border:1px solid #334155;background:#111827;color:#e5e7eb;font-size:12px;line-height:1.3}.service-status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}.service-status.running{background:#102f20;border-color:#166534;color:#86efac}.service-status.degraded{background:#422006;border-color:#a16207;color:#fde68a}.service-status.failed{background:#451a1a;border-color:#991b1b;color:#fecaca}.service-status.starting{background:#172554;border-color:#1d4ed8;color:#93c5fd}.service-status.idle{background:#1f2937;border-color:#475569;color:#cbd5e1}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.settings-panel{max-width:760px}.settings-row{display:grid;grid-template-columns:180px 120px auto 1fr;gap:10px;align-items:center;padding:12px 14px}.filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,126px) minmax(112px,126px) auto;gap:8px;padding:12px 14px;border-bottom:1px solid #263244}.filters input{min-width:0}.filters input[type=date]{padding:0 6px;font-size:13px}
-.timeline{padding:0;position:relative}.timeline.locked{pointer-events:none}.timeline.locked .timeline-row{opacity:.55}.day-group{border-bottom:1px solid #243044}.day-stamp{display:flex;align-items:baseline;gap:8px;padding:9px 16px;background:#0b1220;color:#cbd5e1;border-bottom:1px solid #243044}.day-num{font-size:18px;font-weight:800;line-height:1;color:#f8fafc}.day-label{color:#94a3b8;font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.timeline-row{position:relative;display:grid;grid-template-columns:18px minmax(68px,86px) minmax(0,1fr);gap:12px;padding:12px 14px;border-bottom:1px solid #1d2736;cursor:pointer}.timeline-row:last-child{border-bottom:0}.timeline-row:hover,.timeline-row.selected{background:#141d2d}.timeline-row.selected{box-shadow:inset 3px 0 0 #38bdf8}.timeline-row.loading{opacity:1;background:#111c2d}.timeline-row.loading:after{content:"";position:absolute;right:12px;top:50%;width:14px;height:14px;margin-top:-7px;border:2px solid #334155;border-top-color:#38bdf8;border-radius:999px;animation:spin .8s linear infinite}.timeline-dot{width:9px;height:9px;margin-top:5px;border-radius:999px;border:2px solid #38bdf8;background:#38bdf8}.timeline-dot.empty{background:transparent}.timeline-time{color:#d1d5db;font-size:14px;line-height:1.35;white-space:nowrap}.timeline-main{min-width:0}.timeline-title-row,.timeline-meta-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}.timeline-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f3f4f6;font-size:15px;font-weight:700}.timeline-code{justify-self:end}.timeline-meta-row{margin-top:4px}.timeline-range{color:#94a3b8;font-size:11px}.timeline-empty{padding:16px;color:#94a3b8}.detail-loading{min-height:320px;display:grid;place-items:center;color:#cbd5e1}.loader{display:flex;align-items:center;gap:10px}.loader:before{content:"";width:20px;height:20px;border:2px solid #334155;border-top-color:#38bdf8;border-radius:999px;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.meet-code{display:inline-flex;align-items:center;gap:5px;max-width:100%;vertical-align:middle}.meet-code-text{color:#94a3b8;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}.meet-code-actions{display:inline-flex;align-items:center;gap:3px}.icon-btn{width:24px;height:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:transparent;border:1px solid transparent;border-radius:5px;color:#94a3b8;text-decoration:none}.icon-btn:hover{background:#1e293b;border-color:#334155;color:#e5e7eb}.icon-btn svg{width:13px;height:13px}
-.pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;border-top:1px solid #263244}.pagination .pager-actions{display:flex;gap:8px}.pagination button:disabled{opacity:.45;cursor:not-allowed}
-.muted{color:#94a3b8}.status{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 8px;background:#1e293b;color:#c7d2fe;font-size:12px;line-height:1.35}.status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}.status.failed{background:#451a1a;color:#fecaca}.status.delivered{background:#102f20;color:#86efac}.status.no_one_joined,.status.recorded{background:#1f2937;color:#cbd5e1}.status.recording,.status.processing-running{background:#422006;color:#fde68a}.status.processing-done{background:#102f20;color:#86efac}.status.processing-failed{background:#451a1a;color:#fecaca}.status.processing-queued{background:#172554;color:#bfdbfe}.status.scheduled{background:#172554;color:#93c5fd}.status.joining{background:#312e81;color:#c4b5fd}.status.upcoming{background:#0c2d48;color:#7dd3fc}.status.checking{background:#172554;color:#bfdbfe}.status.checking .dots span,.status.processing-running .dots span,.status.processing-queued .dots span{animation:dotPulse 1.2s infinite;opacity:.25}.status.checking .dots span:nth-child(2),.status.processing-running .dots span:nth-child(2),.status.processing-queued .dots span:nth-child(2){animation-delay:.2s}.status.checking .dots span:nth-child(3),.status.processing-running .dots span:nth-child(3),.status.processing-queued .dots span:nth-child(3){animation-delay:.4s}@keyframes dotPulse{0%,80%,100%{opacity:.25}40%{opacity:1}}
-.detail{min-height:520px}.empty-detail{padding:14px}.detail-body{padding:14px}.meta-grid{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid #1f2937}.kv{display:grid;grid-template-columns:minmax(112px,34%) 1fr;gap:8px;padding:8px 12px 8px 0;border-bottom:1px solid #1f2937;min-width:0}.kv:nth-child(odd){border-right:1px solid #1f2937}.kv.wide{display:block;grid-column:1/-1;border-right:0;padding:12px 0 14px}.kv.wide>.muted{margin-bottom:8px}.kv.wide>div:last-child{width:100%}.kv>div{min-width:0}.instruction-box{margin:12px 0 16px;border:1px solid #263244;border-radius:8px;background:#0b1220;padding:12px;display:flex;flex-direction:column;gap:10px}.instruction-box h3{font-size:13px}.instruction-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.ai-progress{height:8px;background:#111827;border:1px solid #263244;border-radius:999px;overflow:hidden}.ai-progress-fill{height:100%;width:0;background:linear-gradient(90deg,#38bdf8,#22c55e);transition:width .25s ease}.code-block{margin:12px 0 18px;border:1px solid #263244;border-radius:8px;overflow:hidden;background:#050914}.code-head{height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#111827;border-bottom:1px solid #263244}.code-head h3{font-size:13px}.code-actions{display:flex;align-items:center;gap:6px}.copy-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}.copy-btn svg{width:15px;height:15px}.copied{background:#103224!important;border-color:#166534!important;color:#86efac!important}pre{white-space:pre-wrap;background:#050914;color:#e5e7eb;margin:0;padding:12px;max-height:360px;overflow:auto}
-.screenshot-strip{display:flex;gap:10px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x mandatory;padding:2px 0 8px;max-width:100%}.shot-thumb{flex:0 0 172px;height:104px;padding:0;border-radius:7px;overflow:hidden;position:relative;background:#050914;border-color:#334155;scroll-snap-align:start}.shot-thumb img{width:100%;height:100%;object-fit:cover;display:block}.shot-thumb span{position:absolute;left:6px;bottom:6px;min-width:24px;height:20px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:rgba(15,23,42,.78);color:#e5e7eb;font-size:11px}.shot-thumb:hover{border-color:#38bdf8}.lightbox-open{overflow:hidden}.lightbox{position:fixed;inset:0;z-index:50;background:rgba(3,7,18,.92);display:none;align-items:center;justify-content:center;padding:54px 64px}.lightbox.open{display:flex}.lightbox-img{max-width:100%;max-height:calc(100vh - 122px);object-fit:contain;border:1px solid #334155;border-radius:8px;background:#020617}.lightbox-top{position:absolute;left:18px;right:18px;top:14px;display:flex;align-items:center;justify-content:space-between;gap:12px}.lightbox-count{color:#cbd5e1;font-size:13px}.lightbox-close,.lightbox-prev,.lightbox-next{position:absolute;width:40px;height:40px;padding:0;border-radius:999px;background:#111827cc;border-color:#475569;font-size:22px;line-height:1}.lightbox-close{right:18px;top:12px}.lightbox-prev{left:14px;top:50%;transform:translateY(-50%)}.lightbox-next{right:14px;top:50%;transform:translateY(-50%)}.audio-loader{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.audio-load-actions{display:inline-flex;align-items:center}.audio-load-actions #loadAudioBtn{border-radius:6px 0 0 6px}.audio-load-more{width:30px;padding:0;border-radius:0 6px 6px 0;border-left:0}.audio-stage.is-hidden{display:none}.continuous-player{display:flex;flex-direction:column;gap:8px;width:100%;max-width:none}.audio-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.audio-main{min-width:72px}.segments-row{display:flex;flex-wrap:wrap;gap:6px}.segment-chip{height:28px;padding:0 8px;border-radius:999px;font-size:12px;display:inline-flex;align-items:center;gap:5px}.segment-chip span{color:#94a3b8;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}.segment-chip.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}.segment-chip.active span{color:#bae6fd}.segment-chip:disabled{opacity:.45;cursor:not-allowed}.progress-bar{width:100%;height:34px;background:#111827;border-radius:8px;cursor:pointer;overflow:hidden;border:1px solid #334155;position:relative}.progress-bar.loading{cursor:wait}.waveform-bg{position:absolute;inset:3px 4px;display:flex;align-items:center;gap:1px;opacity:.7;pointer-events:none}.wave-bar{flex:1;min-width:1px;border-radius:999px;background:#475569;opacity:.22}.wave-bar.loaded{background:#7dd3fc;opacity:.65}.load-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(148,163,184,.12);pointer-events:none}.progress-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,rgba(56,189,248,.28),rgba(56,189,248,.08));border-right:2px solid #38bdf8;pointer-events:none}.rate-btns{display:flex;gap:4px}.rate-btn{height:26px;padding:0 7px;font-size:12px}.rate-btn.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}.audio-note{font-size:12px}.login{min-height:100vh;display:grid;place-items:center;background:#070b12}.login-box{width:min(360px,calc(100vw - 32px));background:#0f172a;border:1px solid #263244;border-radius:8px;padding:20px;display:flex;flex-direction:column;gap:10px}.login-box input{height:36px;border:1px solid #334155;background:#070b12;color:#e5e7eb;border-radius:6px;padding:0 10px}.error{color:#fca5a5;margin:0}audio{width:100%;height:34px}
-@media(max-width:900px){.grid{grid-template-columns:1fr}.filters,.settings-row,.manual-join{grid-template-columns:1fr 1fr}.manual-join{width:100%;min-width:0}.manual-join input{grid-column:1/-1}.settings-row label{grid-column:1/-1}.timeline-row{grid-template-columns:16px 74px minmax(0,1fr);gap:10px;padding:11px 10px}.timeline-time{font-size:13px}.timeline-title{font-size:15px}.timeline-title-row,.timeline-meta-row{grid-template-columns:1fr}.timeline-code{justify-self:start}.meet-code{flex-wrap:wrap}.meet-code-text{white-space:normal;overflow-wrap:anywhere}.meta-grid{grid-template-columns:1fr}.kv{grid-column:auto;grid-template-columns:132px 1fr;border-right:0;padding-right:0}.kv.wide{display:block;grid-column:auto;border-right:0;padding-right:0}.shot-thumb{flex-basis:150px;height:90px}.lightbox{padding:54px 12px}.lightbox-prev,.lightbox-next{top:auto;bottom:14px;transform:none}.lightbox-img{max-height:calc(100vh - 142px)}}
-</style>"""
+    return CSS
 
 
 def _script(page: str = "dashboard") -> str:

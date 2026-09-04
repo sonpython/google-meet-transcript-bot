@@ -8,6 +8,7 @@ from pathlib import Path
 from src.config import load_settings
 from src.health_server import serve_forever
 from src.main import main
+from src.mcp_server.supervisor import start_mcp_server_if_enabled
 from src.runtime_audio import start_virtual_audio_if_enabled
 from src.runtime_status import STATUS
 
@@ -50,8 +51,29 @@ def _hold_degraded(missing: list[str]) -> None:
         time.sleep(300)
 
 
+def _seed_admin_user() -> None:
+    # First start after the multi-user upgrade: USER_EMAIL becomes the admin
+    # row (no password until set via /admin/users). No-op when users exist.
+    from src.auth.user_store import UserStore
+    from src.state.db import connect
+
+    settings = load_settings()
+    try:
+        conn = connect(settings.db_path)
+        try:
+            UserStore(conn).seed_admin(settings.user_email)
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
 def run() -> None:
+    _seed_admin_user()
     threading.Thread(target=serve_forever, daemon=True).start()
+    # Before the degraded hold: transcript access via MCP keeps working even
+    # while calendar credentials are missing.
+    start_mcp_server_if_enabled()
     start_virtual_audio_if_enabled()
     missing = _missing_runtime_inputs()
     if missing and os.getenv("ALLOW_DEGRADED_START", "true").lower() == "true":

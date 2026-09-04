@@ -18,6 +18,6 @@ COPY infra ./infra
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir .
 
-EXPOSE 8080
+EXPOSE 8080 18081
 
 CMD ["python", "-m", "src.entrypoint"]

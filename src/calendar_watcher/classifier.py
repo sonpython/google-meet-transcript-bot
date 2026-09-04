@@ -5,23 +5,32 @@ from urllib.parse import urlparse
 from src.models.meeting_event import MeetingEvent
 
 
-def is_qualifying(event: dict[str, Any], user_email: str) -> bool:
+def is_qualifying(event: dict[str, Any], watched_email: str) -> bool:
+    # Invite-driven rule: the watched calendar is the bot's own, so any event
+    # with a Meet link qualifies unless the bot explicitly declined it. An
+    # event without an attendee record for the bot still qualifies (it sits
+    # on the calendar, that is the invitation).
     if not _meet_url(event):
         return False
-    normalized_user = user_email.casefold()
-    organizer = _email(event.get("organizer"))
-    if organizer == normalized_user or _is_self(event.get("organizer")):
-        return True
+    entry = _watched_entry(event, watched_email)
+    if entry and entry.get("responseStatus") == "declined":
+        return False
+    return True
+
+
+def _watched_entry(event: dict[str, Any], watched_email: str) -> dict[str, Any] | None:
+    normalized = watched_email.casefold()
     for attendee in event.get("attendees", []):
-        if _is_self(attendee):
-            return attendee.get("responseStatus") != "declined"
-        if _email(attendee) == normalized_user:
-            return attendee.get("responseStatus") != "declined"
-    return False
+        if _is_self(attendee) or _email(attendee) == normalized:
+            return attendee
+    organizer = event.get("organizer")
+    if _is_self(organizer) or _email(organizer) == normalized:
+        return organizer
+    return None
 
 
-def to_meeting_event(event: dict[str, Any], user_email: str) -> MeetingEvent | None:
-    if not is_qualifying(event, user_email):
+def to_meeting_event(event: dict[str, Any], watched_email: str) -> MeetingEvent | None:
+    if not is_qualifying(event, watched_email):
         return None
     meet_url = _meet_url(event)
     start_utc = _parse_start(event)

@@ -5,7 +5,7 @@
 Docker Compose on `192.168.1.160` (root SSH). The IP is DHCP-assigned and has
 moved before (was `192.168.1.120`). If it is unreachable, the box likely took a
 new lease: the service binds `127.0.0.1:18080` so it is invisible to LAN port
-scans — find it by SSHing candidate hosts and checking for `/opt/meeting-assistant`
+scans - find it by SSHing candidate hosts and checking for `/opt/meeting-assistant`
 (e.g. `docker ps | grep meeting-assistant`).
 
 ## Host Path
@@ -22,11 +22,35 @@ The container publishes the health/status endpoint on the Docker host only:
 http://127.0.0.1:18080/status
 ```
 
-Cloudflare Tunnel should route:
+The MCP server publishes a second loopback port:
 
 ```text
-meet-assistant.sonpython.com -> http://localhost:18080
+http://127.0.0.1:18081/mcp
 ```
+
+Cloudflare Tunnel should route (path rule ordered BEFORE the catch-all):
+
+```text
+meet-assistant.sonpython.com  path ^/mcp  -> http://localhost:18081
+meet-assistant.sonpython.com  catch-all   -> http://localhost:18080
+```
+
+Config-file form:
+
+```yaml
+ingress:
+  - hostname: meet-assistant.sonpython.com
+    path: ^/mcp
+    service: http://localhost:18081
+  - hostname: meet-assistant.sonpython.com
+    service: http://localhost:18080
+  - service: http_status:404
+```
+
+The host tunnel is token-managed, so the rule likely belongs in the Zero Trust
+dashboard instead: add a Public Hostname with path `mcp.*` pointing at
+`http://localhost:18081`, ordered before the existing catch-all hostname.
+Verify which form the host actually uses before editing.
 
 Tunnel runtime on the Docker host:
 
@@ -52,7 +76,7 @@ ssh root@192.168.1.160 'cd /opt/meeting-assistant && docker compose up -d --buil
 Deployed container:
 
 ```text
-meeting-assistant -> 127.0.0.1:18080:8080
+meeting-assistant -> 127.0.0.1:18080:8080 (admin/API), 127.0.0.1:18081:18081 (MCP)
 ```
 
 The service can start in degraded mode while secrets are missing. `/status` reports missing runtime inputs. As of the first Docker host deploy, Gemini, Telegram, and generated passphrases were populated from local Claude memory/env; the remaining required input is the real Google OAuth client secret JSON.
@@ -146,3 +170,49 @@ ssh root@192.168.1.160 "cd /opt/meeting-assistant/data && \
 `mcr.microsoft.com/playwright/python:v1.60.0-noble`. Bump both together - a
 floating `>=` pin once pulled 1.61.0 into a v1.60.0 image and Chromium could
 not launch after the next container recreate.
+
+## Calendar Cutover To The Bot Account (bot-invite model)
+
+The watcher reads the calendar of whoever owns the OAuth token. Since the
+bot-invite switch, that must be `BOT_EMAIL`: people invite the bot to a
+meeting and it joins (declining on the bot calendar removes an event from
+scope). Meetings that do not invite the bot are NOT recorded - announce this
+to the team before cutover and verify recordings during the first week.
+
+Cutover runbook (one-time, on the host):
+
+```bash
+cd /opt/meeting-assistant
+cp data/tokens/user-token.fernet data/tokens/user-token.fernet.bak-$(date +%y%m%d)
+# interactive OAuth signed in as BOT_EMAIL, writes TOKEN_STORE_PATH
+# (run the calendar OAuth flow from an interactive environment as before)
+docker compose up -d --build meeting-assistant
+curl -H "X-API-Key: $ADMIN_TOKEN" http://127.0.0.1:18080/admin/api/upcoming
+```
+
+Check the Workspace calendar setting "automatically add invitations" for the
+bot account if invites do not appear until manually accepted.
+
+Rollback: restore the token backup AND revert the classifier commit together -
+the old calendar and the old qualifying rule are a pair.
+
+## First Admin Bootstrap And User Accounts
+
+On first start after the upgrade, `USER_EMAIL` is seeded as an admin row with
+no password. While authenticated with `ADMIN_TOKEN`, open `/admin/users`, set
+that account's password, and create the other users (temp password + one-time
+personal API key each). Per-user keys work on `/api/*` and `/mcp`; keep
+`ADMIN_TOKEN` for operators only.
+
+## MCP Smoke Checks After Deploy
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/healthz          # 200
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:18081/mcp      # 401 (auth on)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://meet-assistant.sonpython.com/mcp  # 401 via tunnel
+```
+
+Then connect a real MCP client with a Bearer key and list tools. TLS ends at
+cloudflared and cookies are not marked Secure, so never expose 18080/18081
+beyond the host loopback. Fast MCP rollback: set `MCP_ENABLED=false` in
+`.env`, restart the container.

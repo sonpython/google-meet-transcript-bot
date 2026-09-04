@@ -197,7 +197,7 @@ async def main() -> None:
         )
     watcher = CalendarWatcher(
         calendar_client,
-        settings.user_email,
+        settings.bot_email,
         runner.schedule_bot_join,
         settings.calendar_poll_interval_seconds,
         settings.calendar_lookahead_minutes,

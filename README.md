@@ -66,7 +66,7 @@ STORAGE_PASSPHRASE=... uv run python scripts/bot_persistent_login.py \
 
 The keepalive then reopens this profile headless every few minutes (see
 `BOT_SESSION_KEEPALIVE_INTERVAL_SECONDS`, default 300) so cookies/session/keys
-rotate naturally like a real user — no automated password re-login.
+rotate naturally like a real user - no automated password re-login.
 
 Run the watcher after configuring `.env` and `client_secrets.json`:
 
@@ -74,18 +74,34 @@ Run the watcher after configuring `.env` and `client_secrets.json`:
 uv run python -m src.main
 ```
 
+## Multi-User Access
+
+The service has its own user accounts (SQLite `users` table). An admin creates
+them; there is no self-signup:
+
+1. Open `/admin/users` (authenticated with `ADMIN_TOKEN`), create a user with a
+   temp password (min 10 chars), and generate their personal API key. The key
+   is shown exactly once - hand both to the user.
+2. The user signs in at `/login`, reads meetings at `/app` (read-only history,
+   transcript, minutes), and changes the password there.
+3. The personal API key works on `/api/*` and on the MCP server.
+
+Visibility is deliberately org-wide: every account sees every meeting. The
+`attendee` filter is a convenience, not an access control. Keep `ADMIN_TOKEN`
+for operators only - it remains a full admin credential.
+
 ## Chatbot API
 
-The admin token also works as the API key. Send it as either:
+`ADMIN_TOKEN` or a personal API key authenticates `/api/*`. Send it as either:
 
 ```bash
-Authorization: Bearer $ADMIN_TOKEN
-X-API-Key: $ADMIN_TOKEN
+Authorization: Bearer $API_KEY
+X-API-Key: $API_KEY
 ```
 
 Endpoints:
 
-- `GET /api/meetings` lists meetings and metadata. Filters: `title` or `q`, `meet_code` or `code`, `status`, `from`, `to`, `limit`, `offset`.
+- `GET /api/meetings` lists meetings and metadata. Filters: `title` or `q`, `meet_code` or `code`, `status`, `attendee`, `from`, `to`, `limit`, `offset`.
 - `GET /api/meetings/{meet_code}` returns one meeting with metadata, transcript, summary, meeting minutes, notes, and file metadata.
 - `GET /api/transcripts` searches by the same filters and returns matching meetings with transcript content included.
 
@@ -99,7 +115,23 @@ curl -H "X-API-Key: $ADMIN_TOKEN" \
   "https://meet-assistant.example.com/api/meetings/abc-defg-hij"
 ```
 
-The first Calendar OAuth run opens a browser and stores the refresh token encrypted at `TOKEN_STORE_PATH`. The bot account login is separate and uses `scripts/bot_persistent_login.py`.
+The first Calendar OAuth run opens a browser and stores the refresh token encrypted at `TOKEN_STORE_PATH`. Sign in as `BOT_EMAIL` - the watcher reads the bot's own calendar. The bot browser login is separate and uses `scripts/bot_persistent_login.py`.
+
+## MCP Server
+
+A second process (`python -m src.mcp_server`, port 18081, enabled with
+`MCP_ENABLED=true`) exposes transcripts over MCP streamable HTTP at
+`https://<host>/mcp`. Auth is `Authorization: Bearer <personal api key>`
+(or `ADMIN_TOKEN`). Tools: `list_meetings`, `get_meeting`, `get_transcript`,
+`search_transcripts`. Every authenticated user sees every meeting (the
+`attendee` argument only filters).
+
+Client config (Claude Code shown; any MCP client with HTTP transport works):
+
+```bash
+claude mcp add --transport http meeting-assistant https://meet-assistant.example.com/mcp \
+  --header "Authorization: Bearer $API_KEY"
+```
 
 ## Required Accounts And Secrets
 
@@ -116,7 +148,7 @@ See `.env.example` for the full runtime configuration.
 
 ## Runtime Flow
 
-1. Calendar watcher finds Meet events where `USER_EMAIL` is organizer or accepted attendee.
+1. Calendar watcher reads the bot's own calendar (`BOT_EMAIL`): invite the bot to a meeting and it joins, unless the invite was declined on the bot calendar. `USER_EMAIL` only seeds the first admin account.
 2. SQLite stores meeting state and APScheduler schedules the bot to join about 60 seconds before start.
 3. Playwright launches Chromium with encrypted bot storage state and joins Meet transparently as `BOT_DISPLAY_NAME`.
 4. FFmpeg records the configured Pulse/PipeWire monitor source to an Opus file.

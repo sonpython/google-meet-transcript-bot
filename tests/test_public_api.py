@@ -90,6 +90,49 @@ def test_api_transcripts_can_find_by_meeting_code(tmp_path: Path, monkeypatch) -
     assert result["meetings"][0]["transcript"] == "Transcript body"
 
 
+def test_api_list_meetings_attendee_filter(tmp_path: Path, monkeypatch) -> None:
+    settings = _seed(tmp_path, monkeypatch)
+    repo = MeetingsRepo(connect(settings.db_path))
+    repo.upsert(
+        MeetingEvent(
+            meet_code="qqq-wwww-eee",
+            event_id="event-special",
+            start_utc=datetime(2026, 5, 21, 9, 0, tzinfo=UTC),
+            end_utc=None,
+            title="Special Meeting",
+            organizer="chair@example.com",
+            attendees=("c@special.com",),
+        )
+    )
+
+    result = health_server._api_list_meetings(parse_qs("attendee=c@special.com"))
+    assert result["pagination"]["total"] == 1
+    assert result["meetings"][0]["meet_code"] == "qqq-wwww-eee"
+    assert result["filters"]["attendee"] == "c@special.com"
+
+    # organizer column matches too
+    by_organizer = health_server._api_list_meetings(parse_qs("attendee=chair@example.com"))
+    assert by_organizer["pagination"]["total"] == 1
+    assert by_organizer["meetings"][0]["meet_code"] == "qqq-wwww-eee"
+
+    # case-insensitive
+    upper = health_server._api_list_meetings(parse_qs("attendee=C@SPECIAL.COM"))
+    assert upper["pagination"]["total"] == 1
+
+    # no match
+    none = health_server._api_list_meetings(parse_qs("attendee=nobody@nowhere.com"))
+    assert none["pagination"]["total"] == 0
+
+
+def test_api_transcripts_accepts_attendee_filter(tmp_path: Path, monkeypatch) -> None:
+    _seed(tmp_path, monkeypatch)
+
+    result = health_server._api_transcripts(parse_qs("attendee=a@example.com"))
+
+    assert result["count"] == 2
+    assert result["filters"]["attendee"] == "a@example.com"
+
+
 def test_admin_audio_segments_default_to_trimmed_variant(tmp_path: Path) -> None:
     audio_dir = tmp_path / "audio"
     audio_dir.mkdir()

@@ -14,13 +14,13 @@ class CalendarWatcher:
     def __init__(
         self,
         calendar_client,
-        user_email: str,
+        watched_email: str,
         on_meeting: MeetingHandler,
         poll_interval_seconds: int = 300,
         lookahead_minutes: int = 60,
     ) -> None:
         self.calendar_client = calendar_client
-        self.user_email = user_email
+        self.watched_email = watched_email
         self.on_meeting = on_meeting
         self.poll_interval_seconds = poll_interval_seconds
         self.lookahead_minutes = lookahead_minutes
@@ -29,7 +29,7 @@ class CalendarWatcher:
     async def poll_once(self) -> int:
         count = 0
         for event in self.calendar_client.list_upcoming(self.lookahead_minutes):
-            meeting = to_meeting_event(event, self.user_email)
+            meeting = to_meeting_event(event, self.watched_email)
             if not meeting:
                 continue
             result = self.on_meeting(meeting)

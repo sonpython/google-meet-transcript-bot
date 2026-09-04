@@ -25,8 +25,12 @@ services:
       SCREENSHOT_DIR: /data/screenshots
       SCREENSHOT_CAPTURE_ENABLED: "true"
       SCREENSHOT_INTERVAL_SECONDS: "300"
+      MCP_ENABLED: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "18081"
     ports:
       - "127.0.0.1:18080:8080"
+      - "127.0.0.1:18081:18081"
     volumes:
       - ./data:/data
       - ./secrets/client_secrets.json:/run/secrets/client_secrets.json:ro
@@ -34,7 +38,7 @@ services:
     security_opt:
       - seccomp=unconfined
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()"]
+      test: ["CMD", "python", "-c", "import socket, urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read(); socket.create_connection(('127.0.0.1', 18081), timeout=2).close()"]
       interval: 30s
       timeout: 5s
       retries: 3
