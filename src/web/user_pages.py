@@ -33,6 +33,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh}
 .backbar{display:flex;align-items:center;gap:10px}
 .empty{color:#94a3b8;padding:20px;text-align:center}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.keyrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #1d2736}
 .chip{height:30px;padding:0 10px;border-radius:999px;font-size:12px;display:inline-flex;align-items:center;gap:5px}
 .chip span{color:#94a3b8;font-family:ui-monospace,Menlo,monospace;font-size:10px}
 .chip.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}
@@ -67,6 +68,7 @@ def app_html(user_email: str) -> str:
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Meeting Assistant</title>{CSS}{_APP_CSS}</head>
 <body><header><h1>Meetings</h1><div class="header-actions"><span class="muted" id="whoami">{email}</span>
+<button onclick="toggleKeys()">API keys</button>
 <button onclick="const b=document.getElementById('pwBox'); b.style.display=b.style.display==='none'?'':'none'">Password</button>
 <form method="post" action="/logout-user" style="margin:0"><button class="danger" type="submit">Logout</button></form></div></header>
 
@@ -78,6 +80,22 @@ def app_html(user_email: str) -> str:
 <input name="new_password" type="password" placeholder="New password (min 10 chars)" autocomplete="new-password" minlength="10" required>
 <button type="submit">Change password</button>
 </form></section>
+<section id="keysBox" class="panel" style="display:none;padding:12px 14px">
+<strong>API keys</strong>
+<p class="muted" style="font-size:12px;margin:6px 0">Personal keys for Claude Code, Codex, or the REST API. A key is shown once at creation. Revoking cuts access immediately.</p>
+<div id="keysList"></div>
+<div class="chips" style="align-items:center">
+<input id="keyName" placeholder="Key name (e.g. laptop, codex)" autocomplete="off" style="flex:1;min-width:140px">
+<select id="keyExpiry" style="height:32px;background:#182235;color:#e5e7eb;border:1px solid #334155;border-radius:6px">
+<option value="">Never expires</option>
+<option value="7">7 days</option>
+<option value="30">30 days</option>
+<option value="90">90 days</option>
+</select>
+<button onclick="createKey()">Create key</button>
+</div>
+<div id="newKeyOut"></div>
+</section>
 <div class="filters-stack">
 <input id="searchTitle" class="full" placeholder="Search title..." autocomplete="off" oninput="debouncedLoad()">
 <input id="dateFrom" type="date" onchange="loadMeetings()">
@@ -86,6 +104,7 @@ def app_html(user_email: str) -> str:
 <input id="attendeeFilter" class="full" placeholder="Filter by attendee email (empty = all meetings)" value="{email}" autocomplete="off" oninput="debouncedLoad()">
 </div>
 <div id="cards"><div class="empty">Loading...</div></div>
+<div id="moreSentinel" style="height:1px"></div><div id="moreStatus" class="empty"></div>
 </main>
 
 <main id="detailView" style="display:none">

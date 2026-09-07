@@ -6,10 +6,67 @@ from urllib.parse import parse_qs
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from src import health_server as core
+from src.auth.api_key_store import ApiKeyStore
+from src.auth.request_auth import AuthContext
+from src.state.db import connect
 from src.web_app.dependencies import require_auth
 from src.web_app.media_files import audio_mode, audio_response, screenshot_response
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
+
+
+def _require_session(request: Request) -> AuthContext:
+    # Key management needs a logged-in browser session: a stolen API key must
+    # not be able to mint replacement keys for itself.
+    context = require_auth(request)
+    if context.kind != "session" or context.user_id is None:
+        raise HTTPException(status_code=403, detail="key management requires a web login session")
+    return context
+
+
+@router.get("/keys")
+def list_keys(request: Request) -> dict:
+    context = _require_session(request)
+    conn = connect(core.load_settings().db_path)
+    try:
+        store = ApiKeyStore(conn)
+        return {"keys": [store.public_row(row) for row in store.list_for_user(context.user_id)]}
+    finally:
+        conn.close()
+
+
+@router.post("/keys")
+async def create_key(request: Request) -> dict:
+    context = _require_session(request)
+    try:
+        payload = await request.json()
+        payload = payload if isinstance(payload, dict) else {}
+    except Exception:
+        payload = {}
+    expires_days = payload.get("expires_days")
+    conn = connect(core.load_settings().db_path)
+    try:
+        store = ApiKeyStore(conn)
+        plaintext, row = store.create(
+            context.user_id,
+            str(payload.get("name", "") or ""),
+            int(expires_days) if expires_days else None,
+        )
+        return {"ok": True, "api_key": plaintext, "key": store.public_row(row)}
+    finally:
+        conn.close()
+
+
+@router.post("/keys/{key_id}/revoke")
+def revoke_key(key_id: int, request: Request) -> dict:
+    context = _require_session(request)
+    conn = connect(core.load_settings().db_path)
+    try:
+        if not ApiKeyStore(conn).delete(key_id, context.user_id):
+            raise HTTPException(status_code=404, detail="key not found")
+        return {"ok": True}
+    finally:
+        conn.close()
 
 
 def _params(request: Request) -> dict[str, list[str]]:

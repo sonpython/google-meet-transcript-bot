@@ -17,7 +17,8 @@ def list_users(db_path: Path) -> dict:
     conn = connect(db_path)
     try:
         rows = UserStore(conn).list_users()
-        return {"users": [_public_user(row) for row in rows]}
+        counts = dict(conn.execute("SELECT user_id, COUNT(*) FROM api_keys GROUP BY user_id"))
+        return {"users": [_public_user(row, counts.get(row["id"], 0)) for row in rows]}
     finally:
         conn.close()
 
@@ -100,7 +101,7 @@ def set_active(db_path: Path, user_id: int, payload: dict) -> dict:
         conn.close()
 
 
-def _public_user(row) -> dict:
+def _public_user(row, key_count: int = 0) -> dict:
     return {
         "id": row["id"],
         "email": row["email"],
@@ -108,7 +109,8 @@ def _public_user(row) -> dict:
         "is_admin": bool(row["is_admin"]),
         "is_active": bool(row["is_active"]),
         "has_password": row["password_hash"] is not None,
-        "has_api_key": row["api_key_hash"] is not None,
+        "has_api_key": key_count > 0,
+        "key_count": key_count,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

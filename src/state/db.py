@@ -70,6 +70,26 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE UNIQUE INDEX IF NOT EXISTS users_api_key_hash_idx
     ON users(api_key_hash) WHERE api_key_hash IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS api_keys_user_idx ON api_keys(user_id);
+
+-- One-time move of the legacy single-key column into api_keys. Clearing the
+-- column afterwards is what makes this idempotent: a revoked key must not be
+-- resurrected from users.api_key_hash on the next connect.
+INSERT INTO api_keys (user_id, name, key_hash)
+    SELECT id, 'default', api_key_hash FROM users
+    WHERE api_key_hash IS NOT NULL
+      AND api_key_hash NOT IN (SELECT key_hash FROM api_keys);
+UPDATE users SET api_key_hash = NULL WHERE api_key_hash IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS user_sessions (
     token_hash TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

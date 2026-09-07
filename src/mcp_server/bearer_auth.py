@@ -43,8 +43,16 @@ def verify_key(key: str, db_path: Path, admin_token: str) -> bool:
     except Exception:
         return False
     try:
+        from datetime import UTC, datetime
+
         row = conn.execute(
-            "SELECT 1 FROM users WHERE api_key_hash = ? AND is_active = 1", (key_hash,)
+            """
+            SELECT 1 FROM api_keys k
+            JOIN users u ON u.id = k.user_id
+            WHERE k.key_hash = ? AND u.is_active = 1
+              AND (k.expires_at IS NULL OR k.expires_at > ?)
+            """,
+            (key_hash, datetime.now(UTC).isoformat()),
         ).fetchone()
         return row is not None
     except Exception:

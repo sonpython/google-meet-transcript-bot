@@ -8,7 +8,6 @@ case-insensitive.
 import sqlite3
 from sqlite3 import Connection, Row
 
-from src.auth.api_key import generate_api_key, hash_api_key
 from src.auth.password_hash import hash_password, verify_password
 
 
@@ -67,20 +66,19 @@ class UserStore:
         self.conn.commit()
 
     def rotate_api_key(self, user_id: int) -> str:
-        plaintext = generate_api_key()
-        self.conn.execute(
-            "UPDATE users SET api_key_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (hash_api_key(plaintext), user_id),
-        )
-        self.conn.commit()
+        # Admin reset semantics: every existing key dies and a single fresh
+        # one is issued. Users mint additional named keys via ApiKeyStore.
+        from src.auth.api_key_store import ApiKeyStore
+
+        store = ApiKeyStore(self.conn)
+        store.delete_for_user(user_id)
+        plaintext, _ = store.create(user_id, "admin-issued")
         return plaintext
 
     def revoke_api_key(self, user_id: int) -> None:
-        self.conn.execute(
-            "UPDATE users SET api_key_hash = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (user_id,),
-        )
-        self.conn.commit()
+        from src.auth.api_key_store import ApiKeyStore
+
+        ApiKeyStore(self.conn).delete_for_user(user_id)
 
     def set_active(self, user_id: int, active: bool) -> None:
         self.conn.execute(
@@ -90,12 +88,9 @@ class UserStore:
         self.conn.commit()
 
     def find_by_api_key(self, plaintext: str) -> Row | None:
-        if not plaintext:
-            return None
-        return self.conn.execute(
-            "SELECT * FROM users WHERE api_key_hash = ? AND is_active = 1",
-            (hash_api_key(plaintext),),
-        ).fetchone()
+        from src.auth.api_key_store import ApiKeyStore
+
+        return ApiKeyStore(self.conn).find_user_by_key(plaintext)
 
     def seed_admin(self, email: str) -> Row | None:
         # Bootstrap only: on a brand new users table, register USER_EMAIL as

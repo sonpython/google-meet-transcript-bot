@@ -13,13 +13,24 @@ function fmtFull(v){if(!v)return ''; try{return new Date(v).toLocaleString([],{d
 function fmtDur(s){s=Math.max(0,Math.round(s||0)); const m=Math.floor(s/60); return `${m}:${String(s%60).padStart(2,'0')}`;}
 function badge(s){const labels={delivered:'Done',failed:'Fail',scheduled:'Sched',joining:'Join',recording:'Rec',recorded:'Saved',processing:'Proc',no_one_joined:'Empty',cancelled:'Cancel'}; return `<span class="status ${esc(s)}">${esc(labels[s]||s)}</span>`;}
 let debounceTimer=null;
-function debouncedLoad(){clearTimeout(debounceTimer); debounceTimer=setTimeout(loadMeetings,300);}
-function params(){const p=new URLSearchParams(); const q=document.getElementById('searchTitle').value.trim(); const from=document.getElementById('dateFrom').value; const to=document.getElementById('dateTo').value; const attendee=document.getElementById('attendeeFilter').value.trim(); if(q)p.set('q',q); if(from)p.set('from',from); if(to)p.set('to',to); if(attendee)p.set('attendee',attendee); p.set('limit','200'); return p.toString();}
-async function loadMeetings(){const r=await fetch('/api/meetings?'+params(),{cache:'no-store'}); if(r.status===401){window.location='/login'; return;} const d=await r.json(); const el=document.getElementById('cards'); if(!d.meetings.length){el.innerHTML='<div class="empty">No meetings.</div>'; return;}
-el.innerHTML=d.meetings.map(m=>`<div class="mcard" onclick="openDetail('${esc(m.meet_code)}')">
+function debouncedLoad(){clearTimeout(debounceTimer); debounceTimer=setTimeout(()=>loadMeetings(true),300);}
+const PAGE_SIZE=10;
+let feed={offset:0,total:null,busy:false};
+function params(offset){const p=new URLSearchParams(); const q=document.getElementById('searchTitle').value.trim(); const from=document.getElementById('dateFrom').value; const to=document.getElementById('dateTo').value; const attendee=document.getElementById('attendeeFilter').value.trim(); if(q)p.set('q',q); if(from)p.set('from',from); if(to)p.set('to',to); if(attendee)p.set('attendee',attendee); p.set('limit',String(PAGE_SIZE)); p.set('offset',String(offset)); return p.toString();}
+function cardHtml(m){return `<div class="mcard" onclick="openDetail('${esc(m.meet_code)}')">
 <div class="mcard-top"><span class="mcard-title">${esc(m.title)}</span>${badge(m.status)}</div>
 <div class="mcard-meta"><span>${fmtDate(m.scheduled_start_utc)} &middot; ${fmtTime(m.scheduled_start_utc)}${m.scheduled_end_utc?'-'+fmtTime(m.scheduled_end_utc):''}</span><span>${esc(m.organizer||'')}</span></div>
-</div>`).join('');}
+</div>`;}
+async function loadMeetings(reset=true){if(feed.busy)return; feed.busy=true;
+try{const offset=reset?0:feed.offset; const r=await fetch('/api/meetings?'+params(offset),{cache:'no-store'}); if(r.status===401){window.location='/login'; return;} const d=await r.json(); const el=document.getElementById('cards');
+if(reset){el.innerHTML=''; feed={offset:0,total:null,busy:true};}
+feed.total=d.pagination.total; feed.offset=offset+d.meetings.length;
+if(!feed.offset){el.innerHTML='<div class="empty">No meetings.</div>';}
+else{el.insertAdjacentHTML('beforeend',d.meetings.map(cardHtml).join(''));}
+document.getElementById('moreStatus').textContent=feed.offset<feed.total?'':'';
+}finally{feed.busy=false;}}
+const sentinel=document.getElementById('moreSentinel');
+new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting)&&feed.total!==null&&feed.offset<feed.total)loadMeetings(false);},{rootMargin:'300px'}).observe(sentinel);
 function showList(){stopAudio(); document.getElementById('detailView').style.display='none'; document.getElementById('listView').style.display='';}
 function openDetail(code,push=true){if(push)history.pushState({code},'','?meeting='+encodeURIComponent(code)); renderDetail(code);}
 async function renderDetail(code){document.getElementById('listView').style.display='none'; document.getElementById('detailView').style.display=''; document.getElementById('detailCode').textContent=code; document.getElementById('detail').innerHTML='<div class="empty">Loading...</div>'; window.scrollTo(0,0);
@@ -81,9 +92,28 @@ root.innerHTML=`<div class="lightbox-top"><span class="lightbox-count">${shotSta
 root.classList.add('open');}
 function moveShot(delta){if(!shotState)return; const n=shotState.list.length; shotState.idx=(shotState.idx+delta+n)%n; renderShot();}
 function closeShot(){document.getElementById('shotBox')?.classList.remove('open'); document.body.classList.remove('lightbox-open'); shotState=null;}
+// ---- API key self-management (session-only endpoints) ----
+function toggleKeys(){const box=document.getElementById('keysBox'); const visible=box.style.display!=='none'; box.style.display=visible?'none':''; if(!visible)loadKeys();}
+async function loadKeys(){const r=await fetch('/api/keys',{cache:'no-store'}); const d=await r.json(); const el=document.getElementById('keysList'); if(d.error){el.innerHTML=`<div class="empty">${esc(d.error)}</div>`; return;}
+if(!d.keys.length){el.innerHTML='<div class="empty">No API keys yet. Create one below.</div>'; return;}
+el.innerHTML=d.keys.map(k=>`<div class="keyrow"><div><strong>${esc(k.name)}</strong><div class="muted" style="font-size:11px">created ${esc(String(k.created_at||'').slice(0,10))} &middot; ${k.expires_at?'expires '+esc(String(k.expires_at).slice(0,10)):'never expires'}</div></div><button class="danger" onclick="revokeKey(${k.id})">Revoke</button></div>`).join('');}
+async function createKey(){const name=document.getElementById('keyName').value.trim(); const days=document.getElementById('keyExpiry').value;
+const r=await fetch('/api/keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,expires_days:days?Number(days):null})});
+const d=await r.json(); if(d.error){alert(d.error); return;}
+document.getElementById('keyName').value='';
+const mcpUrl=location.origin+'/mcp';
+document.getElementById('newKeyOut').innerHTML=[
+ keyBlock('API key (shown once, copy now)',d.api_key),
+ keyBlock('Claude Code',`claude mcp add --transport http meeting-assistant ${mcpUrl} --header "Authorization: Bearer ${d.api_key}"`),
+ keyBlock('Codex (~/.codex/config.toml)',`[mcp_servers.meeting-assistant]\nurl = "${mcpUrl}"\nbearer_token = "${d.api_key}"`),
+].join('');
+loadKeys();}
+function keyBlock(title,content){return `<div class="code-block"><div class="code-head"><h3>${esc(title)}</h3><button onclick="copyKeyText(this)">Copy</button></div><pre style="max-height:120px">${esc(content)}</pre></div>`;}
+async function copyKeyText(btn){const text=btn.closest('.code-block').querySelector('pre').textContent; try{await navigator.clipboard.writeText(text);}catch{const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();} btn.textContent='Copied'; setTimeout(()=>btn.textContent='Copy',1500);}
+async function revokeKey(id){if(!confirm('Revoke this key? Clients using it stop working immediately.'))return; const r=await fetch(`/api/keys/${id}/revoke`,{method:'POST'}); const d=await r.json(); if(d.error){alert(d.error); return;} loadKeys();}
 // ---- boot ----
-function clearFilters(){for(const id of ['searchTitle','dateFrom','dateTo','attendeeFilter'])document.getElementById(id).value=''; loadMeetings();}
+function clearFilters(){for(const id of ['searchTitle','dateFrom','dateTo','attendeeFilter'])document.getElementById(id).value=''; loadMeetings(true);}
 window.addEventListener('popstate',()=>{const code=new URLSearchParams(location.search).get('meeting'); if(code)renderDetail(code); else showList();});
 const initial=new URLSearchParams(location.search).get('meeting');
-loadMeetings().then(()=>{if(initial)openDetail(initial,false);});
+loadMeetings(true).then(()=>{if(initial)openDetail(initial,false);});
 """
