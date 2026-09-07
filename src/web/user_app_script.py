@@ -31,9 +31,14 @@ document.getElementById('moreStatus').textContent=feed.offset<feed.total?'':'';
 }finally{feed.busy=false;}}
 const sentinel=document.getElementById('moreSentinel');
 new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting)&&feed.total!==null&&feed.offset<feed.total)loadMeetings(false);},{rootMargin:'300px'}).observe(sentinel);
-function showList(){stopAudio(); document.getElementById('detailView').style.display='none'; document.getElementById('listView').style.display='';}
+const VIEWS=['listView','detailView','keysView','passwordView'];
+function showView(id){stopAudio(); for(const v of VIEWS)document.getElementById(v).style.display=v===id?'':'none'; window.scrollTo(0,0);}
+function showList(){showView('listView');}
+function toggleMenu(event){event.stopPropagation(); const p=document.getElementById('menuPanel'); p.style.display=p.style.display==='none'?'':'none';}
+document.addEventListener('click',e=>{const p=document.getElementById('menuPanel'); if(p.style.display!=='none'&&!e.target.closest('.menu'))p.style.display='none';});
+function openPage(page,push=true){document.getElementById('menuPanel').style.display='none'; if(push)history.pushState({page},'','?page='+page); if(page==='keys'){showView('keysView'); loadKeys();} else if(page==='password'){showView('passwordView');} else showList();}
 function openDetail(code,push=true){if(push)history.pushState({code},'','?meeting='+encodeURIComponent(code)); renderDetail(code);}
-async function renderDetail(code){document.getElementById('listView').style.display='none'; document.getElementById('detailView').style.display=''; document.getElementById('detailCode').textContent=code; document.getElementById('detail').innerHTML='<div class="empty">Loading...</div>'; window.scrollTo(0,0);
+async function renderDetail(code){showView('detailView'); document.getElementById('detailCode').textContent=code; document.getElementById('detail').innerHTML='<div class="empty">Loading...</div>';
 const r=await fetch('/api/meetings/'+encodeURIComponent(code),{cache:'no-store'}); if(r.status===401){window.location='/login'; return;} const d=await r.json(); if(d.error){document.getElementById('detail').innerHTML=`<div class="empty">${esc(d.error)}</div>`; return;} const m=d.meeting; currentDetail=m;
 const row=(k,v)=>v?`<div><span class="muted">${k}</span><span>${v}</span></div>`:'';
 const block=(title,content)=>content?`<div class="code-block"><div class="code-head"><h3>${title}</h3></div><pre>${esc(content)}</pre></div>`:'';
@@ -93,7 +98,6 @@ root.classList.add('open');}
 function moveShot(delta){if(!shotState)return; const n=shotState.list.length; shotState.idx=(shotState.idx+delta+n)%n; renderShot();}
 function closeShot(){document.getElementById('shotBox')?.classList.remove('open'); document.body.classList.remove('lightbox-open'); shotState=null;}
 // ---- API key self-management (session-only endpoints) ----
-function toggleKeys(){const box=document.getElementById('keysBox'); const visible=box.style.display!=='none'; box.style.display=visible?'none':''; if(!visible)loadKeys();}
 async function loadKeys(){const r=await fetch('/api/keys',{cache:'no-store'}); const d=await r.json(); const el=document.getElementById('keysList'); if(d.error){el.innerHTML=`<div class="empty">${esc(d.error)}</div>`; return;}
 if(!d.keys.length){el.innerHTML='<div class="empty">No API keys yet. Create one below.</div>'; return;}
 el.innerHTML=d.keys.map(k=>`<div class="keyrow"><div><strong>${esc(k.name)}</strong><div class="muted" style="font-size:11px">created ${esc(String(k.created_at||'').slice(0,10))} &middot; ${k.expires_at?'expires '+esc(String(k.expires_at).slice(0,10)):'never expires'}</div></div><button class="danger" onclick="revokeKey(${k.id})">Revoke</button></div>`).join('');}
@@ -113,7 +117,7 @@ async function copyKeyText(btn){const text=btn.closest('.code-block').querySelec
 async function revokeKey(id){if(!confirm('Revoke this key? Clients using it stop working immediately.'))return; const r=await fetch(`/api/keys/${id}/revoke`,{method:'POST'}); const d=await r.json(); if(d.error){alert(d.error); return;} loadKeys();}
 // ---- boot ----
 function clearFilters(){for(const id of ['searchTitle','dateFrom','dateTo','attendeeFilter'])document.getElementById(id).value=''; loadMeetings(true);}
-window.addEventListener('popstate',()=>{const code=new URLSearchParams(location.search).get('meeting'); if(code)renderDetail(code); else showList();});
-const initial=new URLSearchParams(location.search).get('meeting');
-loadMeetings(true).then(()=>{if(initial)openDetail(initial,false);});
+function route(){const params=new URLSearchParams(location.search); const code=params.get('meeting'); const page=params.get('page'); if(code)renderDetail(code); else if(page)openPage(page,false); else showList();}
+window.addEventListener('popstate',route);
+loadMeetings(true).then(route);
 """
