@@ -15,10 +15,32 @@ from src.web_app.pages_routes import router as pages_router
 from src.web_app.public_api_routes import router as public_api_router
 
 
-def create_app() -> FastAPI:
+class AppWithMcp:
+    """Routes /mcp to the MCP ASGI app, everything else to FastAPI.
+
+    A Starlette mount would 307-redirect the exact path /mcp to /mcp/,
+    which not every MCP client follows; this dispatcher serves /mcp
+    directly. Lifespan goes to the FastAPI app, whose lifespan runs the
+    MCP session manager.
+    """
+
+    def __init__(self, web_app, mcp_app) -> None:
+        self.web_app = web_app
+        self.mcp_app = mcp_app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http" and (
+            scope["path"] == "/mcp" or scope["path"].startswith("/mcp/")
+        ):
+            await self.mcp_app(scope, receive, send)
+            return
+        await self.web_app(scope, receive, send)
+
+
+def create_app() -> AppWithMcp:
     settings = core.load_settings()
     mcp_http = build_server(settings.db_path).streamable_http_app(
-        streamable_http_path="/",
+        streamable_http_path="/mcp",
         stateless_http=True,
         json_response=False,
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
@@ -35,7 +57,6 @@ def create_app() -> FastAPI:
     app.include_router(pages_router)
     app.include_router(public_api_router)
     app.include_router(admin_api_router)
-    app.mount("/mcp", BearerAuthASGI(mcp_http, settings.db_path, settings.admin_token or ""))
 
     # Keep the legacy error body shape ({"error": ...}) that the page JS and
     # API clients already parse.
@@ -51,4 +72,4 @@ def create_app() -> FastAPI:
     async def server_error(request: Request, exc: Exception):
         return JSONResponse({"error": str(exc)}, status_code=500)
 
-    return app
+    return AppWithMcp(app, BearerAuthASGI(mcp_http, settings.db_path, settings.admin_token or ""))

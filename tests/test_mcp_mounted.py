@@ -43,13 +43,18 @@ def client(tmp_path: Path, monkeypatch):
 
 
 def test_mcp_mounted_requires_bearer(client) -> None:
-    response = client.post("/mcp", json=INITIALIZE, headers=MCP_HEADERS)
+    # follow_redirects off: the exact /mcp path must answer directly, a 307
+    # to /mcp/ would break MCP clients that do not follow redirects
+    response = client.post("/mcp", json=INITIALIZE, headers=MCP_HEADERS, follow_redirects=False)
     assert response.status_code == 401
 
 
 def test_mcp_mounted_initializes_with_admin_token(client) -> None:
     response = client.post(
-        "/mcp", json=INITIALIZE, headers={**MCP_HEADERS, "Authorization": f"Bearer {ADMIN_TOKEN}"}
+        "/mcp",
+        json=INITIALIZE,
+        headers={**MCP_HEADERS, "Authorization": f"Bearer {ADMIN_TOKEN}"},
+        follow_redirects=False,
     )
     assert response.status_code == 200
     assert "meeting-assistant" in response.text
