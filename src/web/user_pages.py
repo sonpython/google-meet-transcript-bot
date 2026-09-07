@@ -21,7 +21,10 @@ header{position:sticky;top:0;z-index:5}
 .searchbar input{flex:1;min-width:0}
 .filter-row{display:grid;grid-template-columns:84px 1fr;align-items:center;gap:8px;margin-bottom:8px}
 .filter-row label{color:#94a3b8;font-size:13px}
-.filter-row input{width:100%;min-width:0}
+.filter-row input{width:100%;min-width:0;max-width:100%}
+/* iOS Safari gives date inputs an intrinsic width that ignores width:100%
+   unless the native appearance is disabled */
+.filter-row input[type=date]{-webkit-appearance:none;appearance:none;display:block;box-sizing:border-box;padding:0 8px;font-size:14px;line-height:30px;color:#e5e7eb;background:#182235}
 #filterBtn.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}
 .mcard{background:#0f172a;border:1px solid #263244;border-radius:10px;padding:12px 14px;cursor:pointer}
 .mcard:active,.mcard:hover{background:#141d2d;border-color:#38bdf8}
