@@ -27,10 +27,16 @@ if(reset){el.innerHTML=''; feed={offset:0,total:null,busy:true};}
 feed.total=d.pagination.total; feed.offset=offset+d.meetings.length;
 if(!feed.offset){el.innerHTML='<div class="empty">No meetings.</div>';}
 else{el.insertAdjacentHTML('beforeend',d.meetings.map(cardHtml).join(''));}
-document.getElementById('moreStatus').textContent=feed.offset<feed.total?'':'';
-}finally{feed.busy=false;}}
+document.getElementById('moreStatus').textContent=feed.offset<feed.total?'Loading more on scroll...':'';
+}finally{feed.busy=false; setTimeout(maybeLoadMore,60);}}
 const sentinel=document.getElementById('moreSentinel');
-new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting)&&feed.total!==null&&feed.offset<feed.total)loadMeetings(false);},{rootMargin:'300px'}).observe(sentinel);
+function moreAvailable(){return feed.total!==null&&feed.offset<feed.total&&document.getElementById('listView').style.display!=='none';}
+// The observer alone misses the case where page 1 does not fill the screen:
+// the sentinel is already intersecting, so no new event ever fires. After
+// every load, keep pulling pages while the sentinel sits near the viewport.
+function maybeLoadMore(){if(!moreAvailable()||feed.busy)return; const rect=sentinel.getBoundingClientRect(); if(rect.top<window.innerHeight+300)loadMeetings(false);}
+new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting))maybeLoadMore();},{rootMargin:'300px'}).observe(sentinel);
+window.addEventListener('scroll',()=>{if(moreAvailable()&&!feed.busy)maybeLoadMore();},{passive:true});
 const VIEWS=['listView','detailView','keysView','passwordView'];
 function showView(id){stopAudio(); for(const v of VIEWS)document.getElementById(v).style.display=v===id?'':'none'; window.scrollTo(0,0);}
 function showList(){showView('listView');}
