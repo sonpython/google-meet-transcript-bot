@@ -15,9 +15,9 @@ from src.mcp_server import queries
 from src.mcp_server.bearer_auth import BearerAuthASGI
 
 
-def build_server() -> MCPServer:
+def build_server(db_path=None) -> MCPServer:
     server = MCPServer(name="meeting-assistant")
-    db_path = load_settings().db_path
+    db_path = db_path or load_settings().db_path
 
     @server.tool()
     def list_meetings(

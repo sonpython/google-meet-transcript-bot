@@ -6,10 +6,9 @@ import time
 from pathlib import Path
 
 from src.config import load_settings
-from src.health_server import serve_forever
 from src.main import main
-from src.mcp_server.supervisor import start_mcp_server_if_enabled
 from src.runtime_audio import start_virtual_audio_if_enabled
+from src.web_app.server import serve_forever
 from src.runtime_status import STATUS
 
 
@@ -70,10 +69,10 @@ def _seed_admin_user() -> None:
 
 def run() -> None:
     _seed_admin_user()
+    # The FastAPI app also serves MCP at /mcp, so starting it before the
+    # degraded hold keeps transcript access alive while credentials are
+    # missing.
     threading.Thread(target=serve_forever, daemon=True).start()
-    # Before the degraded hold: transcript access via MCP keeps working even
-    # while calendar credentials are missing.
-    start_mcp_server_if_enabled()
     start_virtual_audio_if_enabled()
     missing = _missing_runtime_inputs()
     if missing and os.getenv("ALLOW_DEGRADED_START", "true").lower() == "true":

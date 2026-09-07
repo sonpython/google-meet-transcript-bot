@@ -22,35 +22,12 @@ The container publishes the health/status endpoint on the Docker host only:
 http://127.0.0.1:18080/status
 ```
 
-The MCP server publishes a second loopback port:
+MCP is served by the same FastAPI process at `/mcp`, so a single tunnel rule
+covers everything:
 
 ```text
-http://127.0.0.1:18081/mcp
+meet-assistant.sonpython.com -> http://localhost:18080
 ```
-
-Cloudflare Tunnel should route (path rule ordered BEFORE the catch-all):
-
-```text
-meet-assistant.sonpython.com  path ^/mcp  -> http://localhost:18081
-meet-assistant.sonpython.com  catch-all   -> http://localhost:18080
-```
-
-Config-file form:
-
-```yaml
-ingress:
-  - hostname: meet-assistant.sonpython.com
-    path: ^/mcp
-    service: http://localhost:18081
-  - hostname: meet-assistant.sonpython.com
-    service: http://localhost:18080
-  - service: http_status:404
-```
-
-The host tunnel is token-managed, so the rule likely belongs in the Zero Trust
-dashboard instead: add a Public Hostname with path `mcp.*` pointing at
-`http://localhost:18081`, ordered before the existing catch-all hostname.
-Verify which form the host actually uses before editing.
 
 Tunnel runtime on the Docker host:
 
@@ -76,7 +53,7 @@ ssh root@192.168.1.160 'cd /opt/meeting-assistant && docker compose up -d --buil
 Deployed container:
 
 ```text
-meeting-assistant -> 127.0.0.1:18080:8080 (admin/API), 127.0.0.1:18081:18081 (MCP)
+meeting-assistant -> 127.0.0.1:18080:8080 (admin/API/user web/MCP, single FastAPI process)
 ```
 
 The service can start in degraded mode while secrets are missing. `/status` reports missing runtime inputs. As of the first Docker host deploy, Gemini, Telegram, and generated passphrases were populated from local Claude memory/env; the remaining required input is the real Google OAuth client secret JSON.
@@ -208,11 +185,10 @@ personal API key each). Per-user keys work on `/api/*` and `/mcp`; keep
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/healthz          # 200
-curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:18081/mcp      # 401 (auth on)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:18080/mcp      # 401 (auth on)
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://meet-assistant.sonpython.com/mcp  # 401 via tunnel
 ```
 
 Then connect a real MCP client with a Bearer key and list tools. TLS ends at
-cloudflared and cookies are not marked Secure, so never expose 18080/18081
-beyond the host loopback. Fast MCP rollback: set `MCP_ENABLED=false` in
-`.env`, restart the container.
+cloudflared and cookies are not marked Secure, so never expose 18080 beyond
+the host loopback.

@@ -1,7 +1,3 @@
-import json
-import threading
-import urllib.error
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -131,32 +127,29 @@ def live_server(tmp_path: Path, monkeypatch):
         )
     finally:
         conn.close()
-    server = health_server.AdminHTTPServer(("127.0.0.1", 0), health_server.AdminHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield settings, f"http://127.0.0.1:{server.server_address[1]}"
-    server.shutdown()
-    server.server_close()
+    from starlette.testclient import TestClient
+
+    from src.web_app.app import create_app
+
+    with TestClient(create_app()) as client:
+        yield settings, client
 
 
-def _get(url: str, headers: dict | None = None) -> tuple[int, dict]:
-    request = urllib.request.Request(url, headers=headers or {})
-    try:
-        with urllib.request.urlopen(request) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read().decode("utf-8") or "{}")
+def _get(client_and_path, headers: dict | None = None) -> tuple[int, dict]:
+    client, path = client_and_path
+    response = client.get(path, headers=headers or {})
+    return response.status_code, response.json()
 
 
 def test_http_user_key_reads_api_but_not_admin(live_server) -> None:
     settings, base = live_server
     _, key = _make_user(settings.db_path, "user@example.com")
 
-    status, body = _get(f"{base}/api/meetings", {"Authorization": f"Bearer {key}"})
+    status, body = _get((base, "/api/meetings"), {"Authorization": f"Bearer {key}"})
     assert status == 200
     assert body["pagination"]["total"] == 1
 
-    status, body = _get(f"{base}/admin/api/meetings", {"Authorization": f"Bearer {key}"})
+    status, body = _get((base, "/admin/api/meetings"), {"Authorization": f"Bearer {key}"})
     assert status == 403
     assert body == {"error": "forbidden"}
 
@@ -164,12 +157,12 @@ def test_http_user_key_reads_api_but_not_admin(live_server) -> None:
 def test_http_admin_token_still_works_everywhere(live_server) -> None:
     _, base = live_server
     for path in ("/api/meetings", "/admin/api/meetings"):
-        status, _ = _get(f"{base}{path}", {"X-API-Key": ADMIN_TOKEN})
+        status, _ = _get((base, path), {"X-API-Key": ADMIN_TOKEN})
         assert status == 200
 
 
 def test_http_no_credentials_is_401(live_server) -> None:
     _, base = live_server
-    status, body = _get(f"{base}/api/meetings")
+    status, body = _get((base, "/api/meetings"))
     assert status == 401
     assert body == {"error": "unauthorized"}

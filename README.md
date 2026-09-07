@@ -14,7 +14,7 @@ This project plans a self-hosted Google Meet transcript pipeline for Workspace m
 
 | Layer | Choice |
 |---|---|
-| Runtime | Python 3.12 |
+| Runtime | Python 3.12 + FastAPI |
 | Browser | Playwright + Chromium |
 | Audio | PipeWire + FFmpeg |
 | Scheduler | APScheduler |
@@ -119,9 +119,9 @@ The first Calendar OAuth run opens a browser and stores the refresh token encryp
 
 ## MCP Server
 
-A second process (`python -m src.mcp_server`, port 18081, enabled with
-`MCP_ENABLED=true`) exposes transcripts over MCP streamable HTTP at
-`https://<host>/mcp`. Auth is `Authorization: Bearer <personal api key>`
+The FastAPI app serves MCP streamable HTTP at `https://<host>/mcp`
+(same process and port as the web UI; `python -m src.mcp_server` still
+works standalone). Auth is `Authorization: Bearer <personal api key>`
 (or `ADMIN_TOKEN`). Tools: `list_meetings`, `get_meeting`, `get_transcript`,
 `search_transcripts`. Every authenticated user sees every meeting (the
 `attendee` argument only filters).

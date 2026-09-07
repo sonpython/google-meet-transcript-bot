@@ -1,7 +1,3 @@
-import json
-import threading
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import pytest
@@ -136,20 +132,18 @@ def live_server(tmp_path: Path, monkeypatch):
         admin_token=ADMIN_TOKEN,
     )
     monkeypatch.setattr(health_server, "load_settings", lambda: settings)
-    server = health_server.AdminHTTPServer(("127.0.0.1", 0), health_server.AdminHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield settings, f"http://127.0.0.1:{server.server_address[1]}"
-    server.shutdown()
-    server.server_close()
+    from starlette.testclient import TestClient
+
+    from src.web_app.app import create_app
+
+    with TestClient(create_app()) as client:
+        yield settings, client
 
 
-def _get(url: str, headers: dict | None = None) -> tuple[int, dict]:
-    request = urllib.request.Request(url, headers=headers or {})
-    try:
-        with urllib.request.urlopen(request) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read().decode("utf-8") or "{}")
+def _get(client_and_path, headers: dict | None = None) -> tuple[int, dict]:
+    client, path = client_and_path
+    response = client.get(path, headers=headers or {})
+    return response.status_code, response.json()
 
 
 def test_http_session_cookie_reads_public_api(live_server) -> None:
@@ -161,10 +155,10 @@ def test_http_session_cookie_reads_public_api(live_server) -> None:
     finally:
         conn.close()
 
-    status, _ = _get(f"{base}/api/meetings", {"Cookie": f"ma_session={token}"})
+    status, _ = _get((base, "/api/meetings"), {"Cookie": f"ma_session={token}"})
     assert status == 200
 
-    status, body = _get(f"{base}/admin/api/users", {"Cookie": f"ma_session={token}"})
+    status, body = _get((base, "/admin/api/users"), {"Cookie": f"ma_session={token}"})
     assert status == 403
     assert body == {"error": "forbidden"}
 
@@ -172,6 +166,6 @@ def test_http_session_cookie_reads_public_api(live_server) -> None:
 def test_http_admin_token_lists_users(live_server) -> None:
     settings, base = live_server
     admin_users.create_user(settings.db_path, {"email": "listed@example.com"})
-    status, body = _get(f"{base}/admin/api/users", {"X-API-Key": ADMIN_TOKEN})
+    status, body = _get((base, "/admin/api/users"), {"X-API-Key": ADMIN_TOKEN})
     assert status == 200
     assert body["users"][0]["email"] == "listed@example.com"
