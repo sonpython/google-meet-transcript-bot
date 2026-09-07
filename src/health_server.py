@@ -223,6 +223,20 @@ class AdminHandler(BaseHTTPRequestHandler):
         try:
             if suffix == "meetings":
                 self._send_json(_api_list_meetings(params))
+            elif suffix.startswith("meetings/") and suffix.endswith("/audio"):
+                meet_code = _normalize_meet_code(unquote(suffix.removeprefix("meetings/").removesuffix("/audio")))
+                if not meet_code:
+                    self._send_json({"error": "invalid Meet code"}, status=400)
+                    return
+                index = int(_first_param(params, "index") or "0")
+                self._send_audio(meet_code, index, _audio_mode(parsed))
+            elif suffix.startswith("meetings/") and suffix.endswith("/screenshots"):
+                meet_code = _normalize_meet_code(unquote(suffix.removeprefix("meetings/").removesuffix("/screenshots")))
+                if not meet_code:
+                    self._send_json({"error": "invalid Meet code"}, status=400)
+                    return
+                index = int(_first_param(params, "index") or "0")
+                self._send_screenshot(meet_code, index)
             elif suffix.startswith("meetings/"):
                 meet_code = _normalize_meet_code(unquote(suffix.removeprefix("meetings/")))
                 if not meet_code:
@@ -324,14 +338,44 @@ class AdminHandler(BaseHTTPRequestHandler):
         if not audio.get("exists") or not path.exists():
             self.send_error(404)
             return
-        self.send_response(200)
+        size = path.stat().st_size
+        # Honor single byte ranges: iOS Safari refuses to play audio from a
+        # server that answers its Range probe with a plain 200.
+        start, end, status = 0, size - 1, 200
+        range_header = self.headers.get("Range", "")
+        if range_header.startswith("bytes="):
+            spec = range_header.removeprefix("bytes=").split(",")[0].strip()
+            first, _, last = spec.partition("-")
+            try:
+                if first:
+                    start = int(first)
+                    end = int(last) if last else size - 1
+                elif last:
+                    start = max(0, size - int(last))
+                if 0 <= start < size:
+                    end = min(end, size - 1)
+                    status = 206
+                else:
+                    start, end = 0, size - 1
+            except ValueError:
+                start, end = 0, size - 1
+        self.send_response(status)
         self.send_header("Content-Type", "audio/ogg; codecs=opus")
-        self.send_header("Content-Length", str(path.stat().st_size))
+        self.send_header("Accept-Ranges", "bytes")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Content-Length", str(end - start + 1))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         with path.open("rb") as handle:
-            while chunk := handle.read(1024 * 256):
+            handle.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                chunk = handle.read(min(1024 * 256, remaining))
+                if not chunk:
+                    break
                 self.wfile.write(chunk)
+                remaining -= len(chunk)
 
     def _send_screenshot(self, meet_code: str, index: int = 0) -> None:
         detail = _meeting_detail(meet_code)

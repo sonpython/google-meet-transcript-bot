@@ -10,6 +10,7 @@ session cookie.
 import html
 
 from src.web.styles import CSS
+from src.web.user_app_script import APP_JS
 
 # Overrides the shared admin stylesheet for the user app: single-column,
 # card-based, no fixed grid columns that overflow on narrow screens.
@@ -31,6 +32,15 @@ header{position:sticky;top:0;z-index:5}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh}
 .backbar{display:flex;align-items:center;gap:10px}
 .empty{color:#94a3b8;padding:20px;text-align:center}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.chip{height:30px;padding:0 10px;border-radius:999px;font-size:12px;display:inline-flex;align-items:center;gap:5px}
+.chip span{color:#94a3b8;font-family:ui-monospace,Menlo,monospace;font-size:10px}
+.chip.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}
+.chip.active span{color:#bae6fd}
+.shots{display:flex;gap:8px;overflow-x:auto;padding:10px 12px;scroll-snap-type:x mandatory}
+.shot{flex:0 0 150px;height:92px;padding:0;border-radius:7px;overflow:hidden;position:relative;background:#050914;border:1px solid #334155;scroll-snap-align:start;cursor:pointer}
+.shot img{width:100%;height:100%;object-fit:cover;display:block}
+.shot span{position:absolute;left:6px;bottom:6px;min-width:22px;height:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:rgba(15,23,42,.78);color:#e5e7eb;font-size:11px}
 @media(min-width:700px){.filters-stack{grid-template-columns:2fr 1fr 1fr auto}}
 </style>"""
 
@@ -82,41 +92,5 @@ def app_html(user_email: str) -> str:
 <div class="backbar"><button onclick="history.back()">&#8592; Back</button><span id="detailCode" class="muted"></span></div>
 <div id="detail"></div>
 </main>
-<script>{_APP_JS}</script></body></html>"""
+<script>{APP_JS}</script></body></html>"""
 
-
-_APP_JS = r"""
-function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function fmtDate(v){if(!v)return ''; try{const d=new Date(v); return d.toLocaleDateString([],{day:'numeric',month:'short'});}catch{return '';}}
-function fmtTime(v){if(!v)return ''; try{return new Date(v).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});}catch{return '';}}
-function fmtFull(v){if(!v)return ''; try{const d=new Date(v); return d.toLocaleString([],{day:'numeric',month:'short',year:'numeric',hour:'numeric',minute:'2-digit'});}catch{return v;}}
-function badge(s){const labels={delivered:'Done',failed:'Fail',scheduled:'Sched',joining:'Join',recording:'Rec',recorded:'Saved',processing:'Proc',no_one_joined:'Empty',cancelled:'Cancel'}; return `<span class="status ${esc(s)}">${esc(labels[s]||s)}</span>`;}
-let debounceTimer=null;
-function debouncedLoad(){clearTimeout(debounceTimer); debounceTimer=setTimeout(loadMeetings,300);}
-function params(){const p=new URLSearchParams(); const q=document.getElementById('searchTitle').value.trim(); const from=document.getElementById('dateFrom').value; const to=document.getElementById('dateTo').value; const attendee=document.getElementById('attendeeFilter').value.trim(); if(q)p.set('q',q); if(from)p.set('from',from); if(to)p.set('to',to); if(attendee)p.set('attendee',attendee); p.set('limit','200'); return p.toString();}
-async function loadMeetings(){const r=await fetch('/api/meetings?'+params(),{cache:'no-store'}); if(r.status===401){window.location='/login'; return;} const d=await r.json(); const el=document.getElementById('cards'); if(!d.meetings.length){el.innerHTML='<div class="empty">No meetings.</div>'; return;}
-el.innerHTML=d.meetings.map(m=>`<div class="mcard" onclick="openDetail('${esc(m.meet_code)}')">
-<div class="mcard-top"><span class="mcard-title">${esc(m.title)}</span>${badge(m.status)}</div>
-<div class="mcard-meta"><span>${fmtDate(m.scheduled_start_utc)} &middot; ${fmtTime(m.scheduled_start_utc)}${m.scheduled_end_utc?'-'+fmtTime(m.scheduled_end_utc):''}</span><span>${esc(m.organizer||'')}</span></div>
-</div>`).join('');}
-function showList(){document.getElementById('detailView').style.display='none'; document.getElementById('listView').style.display='';}
-function openDetail(code,push=true){if(push)history.pushState({code},'','?meeting='+encodeURIComponent(code)); renderDetail(code);}
-async function renderDetail(code){document.getElementById('listView').style.display='none'; document.getElementById('detailView').style.display=''; document.getElementById('detailCode').textContent=code; document.getElementById('detail').innerHTML='<div class="empty">Loading...</div>'; window.scrollTo(0,0);
-const r=await fetch('/api/meetings/'+encodeURIComponent(code),{cache:'no-store'}); if(r.status===401){window.location='/login'; return;} const d=await r.json(); if(d.error){document.getElementById('detail').innerHTML=`<div class="empty">${esc(d.error)}</div>`; return;} const m=d.meeting;
-const row=(k,v)=>v?`<div><span class="muted">${k}</span><span>${v}</span></div>`:'';
-const block=(title,content)=>content?`<div class="code-block"><div class="code-head"><h3>${title}</h3></div><pre>${esc(content)}</pre></div>`:'';
-document.getElementById('detail').innerHTML=`<h2 style="margin:10px 0">${esc(m.title)}</h2>
-<div class="detail-meta">
-${row('Status',badge(m.status))}
-${row('Start',esc(fmtFull(m.scheduled_start_utc)))}
-${row('End',esc(fmtFull(m.scheduled_end_utc)))}
-${row('Host',esc(m.organizer||''))}
-${row('Attendees',(m.metadata.attendees||[]).map(esc).join(', '))}
-</div>
-${block('Meeting Minutes',m.meeting_minutes)}${block('Summary',m.summary)}${block('Transcript',m.transcript)}
-${!m.meeting_minutes&&!m.summary&&!m.transcript?'<div class="empty">No content yet.</div>':''}`;}
-function clearFilters(){for(const id of ['searchTitle','dateFrom','dateTo','attendeeFilter'])document.getElementById(id).value=''; loadMeetings();}
-window.addEventListener('popstate',()=>{const code=new URLSearchParams(location.search).get('meeting'); if(code)renderDetail(code); else showList();});
-const initial=new URLSearchParams(location.search).get('meeting');
-loadMeetings().then(()=>{if(initial)openDetail(initial,false);});
-"""
