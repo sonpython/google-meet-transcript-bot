@@ -17,9 +17,12 @@ from src.web.user_app_script import APP_JS
 _APP_CSS = """<style>
 main{max-width:760px;margin:0 auto;padding:14px;display:flex;flex-direction:column;gap:12px}
 header{position:sticky;top:0;z-index:5}
-.filters-stack{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.filters-stack input{min-width:0;width:100%}
-.filters-stack .full{grid-column:1/-1}
+.searchbar{display:flex;gap:8px}
+.searchbar input{flex:1;min-width:0}
+.filter-row{display:grid;grid-template-columns:84px 1fr;align-items:center;gap:8px;margin-bottom:8px}
+.filter-row label{color:#94a3b8;font-size:13px}
+.filter-row input{width:100%;min-width:0}
+#filterBtn.active{background:#0c4a6e;border-color:#0284c7;color:#e0f2fe}
 .mcard{background:#0f172a;border:1px solid #263244;border-radius:10px;padding:12px 14px;cursor:pointer}
 .mcard:active,.mcard:hover{background:#141d2d;border-color:#38bdf8}
 .mcard-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
@@ -47,7 +50,6 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh}
 .shot{flex:0 0 150px;height:92px;padding:0;border-radius:7px;overflow:hidden;position:relative;background:#050914;border:1px solid #334155;scroll-snap-align:start;cursor:pointer}
 .shot img{width:100%;height:100%;object-fit:cover;display:block}
 .shot span{position:absolute;left:6px;bottom:6px;min-width:22px;height:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:rgba(15,23,42,.78);color:#e5e7eb;font-size:11px}
-@media(min-width:700px){.filters-stack{grid-template-columns:2fr 1fr 1fr auto}}
 </style>"""
 
 
@@ -82,13 +84,21 @@ def app_html(user_email: str) -> str:
 </div></div></header>
 
 <main id="listView">
-<div class="filters-stack">
-<input id="searchTitle" class="full" placeholder="Search title..." autocomplete="off" oninput="debouncedLoad()">
-<input id="dateFrom" type="date" onchange="loadMeetings()">
-<input id="dateTo" type="date" onchange="loadMeetings()">
-<button onclick="clearFilters()">Clear</button>
-<input id="attendeeFilter" class="full" placeholder="Filter by attendee email (empty = all meetings)" value="{email}" autocomplete="off" oninput="debouncedLoad()">
+<div class="searchbar">
+<input id="searchTitle" placeholder="Search title..." autocomplete="off" oninput="debouncedLoad()">
+<button id="filterBtn" onclick="toggleFilters()">Filters</button>
 </div>
+<section id="filterPanel" class="panel" style="display:none;padding:12px 14px">
+<div class="filter-row"><label for="attendeeFilter">Attendee</label>
+<input id="attendeeFilter" placeholder="Email (empty = everyone's meetings)" value="{email}" autocomplete="off" oninput="debouncedLoad();updateFilterBtn()"></div>
+<div class="filter-row"><label for="dateFrom">From</label><input id="dateFrom" type="date" onchange="loadMeetings();updateFilterBtn()"></div>
+<div class="filter-row"><label for="dateTo">To</label><input id="dateTo" type="date" onchange="loadMeetings();updateFilterBtn()"></div>
+<div class="chips" style="margin-bottom:0">
+<button onclick="setAttendee('{email}')">My meetings</button>
+<button onclick="setAttendee('')">Everyone</button>
+<button class="danger" onclick="clearFilters()">Clear all</button>
+</div>
+</section>
 <div id="cards"><div class="empty">Loading...</div></div>
 <div id="moreSentinel" style="height:1px"></div><div id="moreStatus" class="empty"></div>
 </main>

@@ -115,9 +115,14 @@ loadKeys();}
 function keyBlock(title,content){return `<div class="code-block"><div class="code-head"><h3>${esc(title)}</h3><button onclick="copyKeyText(this)">Copy</button></div><pre style="max-height:120px">${esc(content)}</pre></div>`;}
 async function copyKeyText(btn){const text=btn.closest('.code-block').querySelector('pre').textContent; try{await navigator.clipboard.writeText(text);}catch{const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();} btn.textContent='Copied'; setTimeout(()=>btn.textContent='Copy',1500);}
 async function revokeKey(id){if(!confirm('Revoke this key? Clients using it stop working immediately.'))return; const r=await fetch(`/api/keys/${id}/revoke`,{method:'POST'}); const d=await r.json(); if(d.error){alert(d.error); return;} loadKeys();}
+// ---- filters ----
+function toggleFilters(){const p=document.getElementById('filterPanel'); p.style.display=p.style.display==='none'?'':'none';}
+function updateFilterBtn(){const active=['dateFrom','dateTo','attendeeFilter'].filter(id=>document.getElementById(id).value.trim()).length; const btn=document.getElementById('filterBtn'); btn.textContent=active?`Filters (${active})`:'Filters'; btn.classList.toggle('active',active>0);}
+function setAttendee(value){document.getElementById('attendeeFilter').value=value; loadMeetings(true); updateFilterBtn();}
 // ---- boot ----
-function clearFilters(){for(const id of ['searchTitle','dateFrom','dateTo','attendeeFilter'])document.getElementById(id).value=''; loadMeetings(true);}
+function clearFilters(){for(const id of ['searchTitle','dateFrom','dateTo','attendeeFilter'])document.getElementById(id).value=''; loadMeetings(true); updateFilterBtn();}
 function route(){const params=new URLSearchParams(location.search); const code=params.get('meeting'); const page=params.get('page'); if(code)renderDetail(code); else if(page)openPage(page,false); else showList();}
 window.addEventListener('popstate',route);
+updateFilterBtn();
 loadMeetings(true).then(route);
 """
