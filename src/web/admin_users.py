@@ -5,11 +5,13 @@ api_key_hash. A rotated API key's plaintext appears exactly once, in the
 rotate response.
 """
 
+import json
 from pathlib import Path
 
 from src.auth.session_store import SessionStore
 from src.auth.user_store import UserStore
 from src.state.db import connect
+from src.web.agent_prompt import AGENT_PROMPT_TEMPLATE
 from src.web.styles import CSS
 
 
@@ -134,6 +136,7 @@ def page_html() -> str:
 <section class="panel"><div class="panel-head"><h2>All users</h2><span id="msg" class="muted" aria-live="polite"></span></div>
 <div id="users" style="padding:12px 14px"></div></section>
 </main>
+<script>const AGENT_PROMPT_TEMPLATE={json.dumps(AGENT_PROMPT_TEMPLATE)};</script>
 <script>{_USERS_JS}</script></body></html>"""
 
 
@@ -159,11 +162,13 @@ const claudeCode=`claude mcp add --transport http meeting-assistant ${mcpUrl} --
 const codex=`# ~/.codex/config.toml\n[mcp_servers.meeting-assistant]\nurl = "${mcpUrl}"\nbearer_token = "${key}"`;
 const rest=`curl -H "Authorization: Bearer ${key}" "${location.origin}/api/meetings?limit=5"`;
 document.getElementById('keyEmail').textContent=email;
+const agentPrompt=AGENT_PROMPT_TEMPLATE.replaceAll('__KEY__',key).replaceAll('__ORIGIN__',location.origin);
 document.getElementById('keyBlocks').innerHTML=[
  copyBlock('API key',key),
  copyBlock('Claude Code (one command)',claudeCode),
  copyBlock('Codex CLI (append to config)',codex),
  copyBlock('REST example',rest),
+ copyBlock('Agent prompt (paste into agent instructions / system prompt)',agentPrompt),
 ].join('')+'<span class="muted">The key is stored hashed on the server and cannot be shown again. Rotate to replace it.</span>';
 document.getElementById('keyPanel').style.display='';
 document.getElementById('keyPanel').scrollIntoView({behavior:'smooth'});}

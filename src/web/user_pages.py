@@ -8,7 +8,9 @@ session cookie.
 """
 
 import html
+import json
 
+from src.web.agent_prompt import AGENT_PROMPT_TEMPLATE
 from src.web.styles import CSS
 from src.web.user_app_script import APP_JS
 
@@ -140,5 +142,6 @@ def app_html(user_email: str) -> str:
 </form>
 </section>
 </main>
+<script>const AGENT_PROMPT_TEMPLATE={json.dumps(AGENT_PROMPT_TEMPLATE)};</script>
 <script>{APP_JS}</script></body></html>"""
 

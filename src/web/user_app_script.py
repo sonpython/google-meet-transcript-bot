@@ -116,8 +116,10 @@ document.getElementById('newKeyOut').innerHTML=[
  keyBlock('API key (shown once, copy now)',d.api_key),
  keyBlock('Claude Code',`claude mcp add --transport http meeting-assistant ${mcpUrl} --header "Authorization: Bearer ${d.api_key}"`),
  keyBlock('Codex (~/.codex/config.toml)',`[mcp_servers.meeting-assistant]\nurl = "${mcpUrl}"\nbearer_token = "${d.api_key}"`),
+ keyBlock('Agent prompt (paste into your agent instructions / system prompt)',agentPrompt(d.api_key)),
 ].join('');
 loadKeys();}
+function agentPrompt(key){return AGENT_PROMPT_TEMPLATE.replaceAll('__KEY__',key).replaceAll('__ORIGIN__',location.origin);}
 function keyBlock(title,content){return `<div class="code-block"><div class="code-head"><h3>${esc(title)}</h3><button onclick="copyKeyText(this)">Copy</button></div><pre style="max-height:120px">${esc(content)}</pre></div>`;}
 async function copyKeyText(btn){const text=btn.closest('.code-block').querySelector('pre').textContent; try{await navigator.clipboard.writeText(text);}catch{const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();} btn.textContent='Copied'; setTimeout(()=>btn.textContent='Copy',1500);}
 async function revokeKey(id){if(!confirm('Revoke this key? Clients using it stop working immediately.'))return; const r=await fetch(`/api/keys/${id}/revoke`,{method:'POST'}); const d=await r.json(); if(d.error){alert(d.error); return;} loadKeys();}

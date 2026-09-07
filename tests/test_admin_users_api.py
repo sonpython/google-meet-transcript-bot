@@ -118,6 +118,8 @@ def test_users_page_offers_mcp_client_snippets() -> None:
     assert "[mcp_servers.meeting-assistant]" in page
     assert "bearer_token" in page
     assert "showKeyPanel" in page
+    assert "AGENT_PROMPT_TEMPLATE" in page
+    assert "list_meetings(date_from" in page
 
 
 @pytest.fixture
