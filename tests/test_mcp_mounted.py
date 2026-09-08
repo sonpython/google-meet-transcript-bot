@@ -62,3 +62,10 @@ def test_mcp_mounted_initializes_with_admin_token(client) -> None:
 
 def test_healthz_still_serves(client) -> None:
     assert client.get("/healthz").status_code == 200
+    assert client.get("/status").status_code == 200
+
+
+def test_root_redirects_to_app(client) -> None:
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/app"

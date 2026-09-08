@@ -4,7 +4,7 @@
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from src import health_server as core
 from src.runtime_status import STATUS
@@ -16,6 +16,12 @@ router = APIRouter()
 
 
 @router.get("/")
+def root():
+    # The bare domain lands users on the app; /app itself bounces to /login
+    # when there is no session. Health probes use /status and /healthz.
+    return RedirectResponse("/app", status_code=302)
+
+
 @router.get("/status")
 @router.get("/healthz")
 def health() -> dict:
