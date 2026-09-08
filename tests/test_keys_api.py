@@ -68,6 +68,15 @@ def test_key_management_rejects_non_session_auth(client_env) -> None:
     assert client.get("/api/keys").status_code == 401
 
 
+def test_manual_join_open_to_users_but_not_anonymous(client_env) -> None:
+    client, session, _ = client_env
+    # invalid code exercises the endpoint without needing a live scheduler
+    response = client.post("/api/manual-join", json={"meet_code": "not a code"}, headers=session)
+    assert response.status_code == 200
+    assert response.json() == {"error": "invalid Meet code"}
+    assert client.post("/api/manual-join", json={"meet_code": "abc-defg-hij"}).status_code == 401
+
+
 def test_revoking_someone_elses_key_is_404(client_env) -> None:
     client, session, settings = client_env
     conn = connect(settings.db_path)

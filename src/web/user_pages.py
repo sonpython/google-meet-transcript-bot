@@ -103,6 +103,10 @@ def app_html(user_email: str) -> str:
 <div class="split">
 <main id="listView">
 <div class="searchbar">
+<input id="joinInput" placeholder="Paste a Meet link or code, bot will join..." autocomplete="off" autocapitalize="none" spellcheck="false" onkeydown="if(event.key==='Enter')manualJoin()">
+<button onclick="manualJoin()">Join</button>
+</div>
+<div class="searchbar">
 <input id="searchTitle" placeholder="Search title..." autocomplete="off" oninput="debouncedLoad()">
 <button id="filterBtn" onclick="toggleFilters()">Filters</button>
 </div>

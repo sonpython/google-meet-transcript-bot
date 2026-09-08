@@ -24,6 +24,18 @@ def _require_session(request: Request) -> AuthContext:
     return context
 
 
+@router.post("/manual-join")
+async def manual_join(request: Request) -> dict:
+    # Any authenticated user may ask the bot to join: same trust model as
+    # inviting the bot on the calendar (D6).
+    try:
+        payload = await request.json()
+        payload = payload if isinstance(payload, dict) else {}
+    except Exception:
+        payload = {}
+    return core._request_manual_join(payload)
+
+
 @router.get("/keys")
 def list_keys(request: Request) -> dict:
     context = _require_session(request)

@@ -95,10 +95,11 @@ def test_app_renders_read_only(db_path: Path) -> None:
     assert response.status == 200
     page = response.body.decode("utf-8")
     assert EMAIL in page
-    # The shared stylesheet ships a .manual-join CSS rule; what must be absent
-    # is any actual control or endpoint call, so check the JS symbols.
-    for forbidden in ("Rejoin", "rejoin(", "deleteMeeting", "force-out", "forceOut", "regenerate", "manualJoin("):
+    # Destructive/admin controls stay absent. Manual join is deliberately
+    # allowed for users (same trust model as inviting the bot by calendar).
+    for forbidden in ("Rejoin", "rejoin(", "deleteMeeting", "force-out", "forceOut", "regenerate"):
         assert forbidden not in page
+    assert "manualJoin(" in page
 
 
 def test_login_page_redirects_when_already_signed_in(db_path: Path) -> None:

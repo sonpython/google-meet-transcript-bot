@@ -127,6 +127,19 @@ function agentPrompt(key){return AGENT_PROMPT_TEMPLATE.replaceAll('__KEY__',key)
 function keyBlock(title,content){return `<div class="code-block"><div class="code-head"><h3>${esc(title)}</h3><button onclick="copyKeyText(this)">Copy</button></div><pre style="max-height:120px">${esc(content)}</pre></div>`;}
 async function copyKeyText(btn){const text=btn.closest('.code-block').querySelector('pre').textContent; try{await navigator.clipboard.writeText(text);}catch{const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();} btn.textContent='Copied'; setTimeout(()=>btn.textContent='Copy',1500);}
 async function revokeKey(id){if(!confirm('Revoke this key? Clients using it stop working immediately.'))return; const r=await fetch(`/api/keys/${id}/revoke`,{method:'POST'}); const d=await r.json(); if(d.error){alert(d.error); return;} loadKeys();}
+// ---- manual join: paste a Meet link, the bot joins ----
+let joinBusy=false;
+async function manualJoin(mode=''){if(joinBusy)return; const input=document.getElementById('joinInput'); const raw=input.value.trim(); if(!raw){alert('Paste a Google Meet link or code first.'); return;} joinBusy=true;
+try{const payload={meet_code:raw}; if(mode)payload.mode=mode;
+const r=await fetch('/api/manual-join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+if(r.status===401){window.location='/login'; return;}
+const d=await r.json();
+if(d.needs_schedule_choice){joinBusy=false; const now=confirm('This meeting is scheduled for later.\n\nOK = bot joins NOW\nCancel = bot joins at the scheduled time'); await manualJoin(now?'join_now':'scheduled'); return;}
+if(d.error){alert(d.error); return;}
+input.value='';
+await loadMeetings(true);
+if(d.meet_code)openDetail(d.meet_code);
+}finally{joinBusy=false;}}
 // ---- filters ----
 function toggleFilters(){const p=document.getElementById('filterPanel'); p.style.display=p.style.display==='none'?'':'none';}
 function updateFilterBtn(){const active=['dateFrom','dateTo','attendeeFilter'].filter(id=>document.getElementById(id).value.trim()).length; const btn=document.getElementById('filterBtn'); btn.textContent=active?`Filters (${active})`:'Filters'; btn.classList.toggle('active',active>0);}
