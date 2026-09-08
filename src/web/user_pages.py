@@ -17,8 +17,20 @@ from src.web.user_app_script import APP_JS
 # Overrides the shared admin stylesheet for the user app: single-column,
 # card-based, no fixed grid columns that overflow on narrow screens.
 _APP_CSS = """<style>
-main{max-width:760px;margin:0 auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+main{max-width:760px;margin:0 auto;padding:14px;display:none;flex-direction:column;gap:12px;min-width:0}
+/* View visibility is CSS-driven off body[data-view] so the desktop media
+   query can show list and detail side by side without JS knowing about
+   breakpoints. */
+body[data-view=list] #listView,body[data-view=detail] #detailView,body[data-view=keys] #keysView,body[data-view=password] #passwordView{display:flex}
 header{position:sticky;top:0;z-index:5}
+@media(min-width:1000px){
+.split{display:grid;grid-template-columns:430px minmax(0,1fr);gap:18px;max-width:1560px;margin:0 auto;padding:16px}
+.split main{max-width:none;margin:0;padding:0}
+body[data-view=list] #detailView,body[data-view=detail] #listView{display:flex}
+#listView{position:sticky;top:72px;max-height:calc(100vh - 90px);overflow-y:auto;padding-right:4px}
+#detailView .backbar button{display:none}
+.mcard.selected{border-color:#38bdf8;box-shadow:inset 3px 0 0 #38bdf8}
+}
 .searchbar{display:flex;gap:8px}
 .searchbar input{flex:1;min-width:0}
 .filter-row{display:grid;grid-template-columns:84px 1fr;align-items:center;gap:8px;margin-bottom:8px}
@@ -79,7 +91,7 @@ def app_html(user_email: str) -> str:
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Meeting Assistant</title>{CSS}{_APP_CSS}</head>
-<body><header><h1>Meetings</h1>
+<body data-view="list"><header><h1>Meetings</h1>
 <div class="menu"><button id="gearBtn" onclick="toggleMenu(event)" aria-label="Menu">&#9881;</button>
 <div id="menuPanel" class="menu-panel" style="display:none">
 <div class="menu-email muted">{email}</div>
@@ -88,6 +100,7 @@ def app_html(user_email: str) -> str:
 <form method="post" action="/logout-user" style="margin:0"><button class="danger" type="submit" style="width:100%">Logout</button></form>
 </div></div></header>
 
+<div class="split">
 <main id="listView">
 <div class="searchbar">
 <input id="searchTitle" placeholder="Search title..." autocomplete="off" oninput="debouncedLoad()">
@@ -108,12 +121,13 @@ def app_html(user_email: str) -> str:
 <div id="moreSentinel" style="height:1px"></div><div id="moreStatus" class="empty"></div>
 </main>
 
-<main id="detailView" style="display:none">
+<main id="detailView">
 <div class="backbar"><button onclick="history.back()">&#8592; Back</button><span id="detailCode" class="muted"></span></div>
-<div id="detail"></div>
+<div id="detail"><div class="empty">Select a meeting to view details.</div></div>
 </main>
+</div>
 
-<main id="keysView" style="display:none">
+<main id="keysView">
 <div class="backbar"><button onclick="history.back()">&#8592; Back</button><h2 style="margin:0">API keys</h2></div>
 <section class="panel" style="padding:12px 14px">
 <p class="muted" style="font-size:12px;margin:6px 0">Personal keys for Claude Code, Codex, or the REST API. A key is shown once at creation. Revoking cuts access immediately.</p>
@@ -132,7 +146,7 @@ def app_html(user_email: str) -> str:
 </section>
 </main>
 
-<main id="passwordView" style="display:none">
+<main id="passwordView">
 <div class="backbar"><button onclick="history.back()">&#8592; Back</button><h2 style="margin:0">Change password</h2></div>
 <section class="panel" style="padding:14px">
 <form method="post" action="/account/password" style="display:flex;flex-direction:column;gap:10px;max-width:420px">

@@ -17,7 +17,7 @@ function debouncedLoad(){clearTimeout(debounceTimer); debounceTimer=setTimeout((
 const PAGE_SIZE=10;
 let feed={offset:0,total:null,busy:false};
 function params(offset){const p=new URLSearchParams(); const q=document.getElementById('searchTitle').value.trim(); const from=document.getElementById('dateFrom').value; const to=document.getElementById('dateTo').value; const attendee=document.getElementById('attendeeFilter').value.trim(); if(q)p.set('q',q); if(from)p.set('from',from); if(to)p.set('to',to); if(attendee)p.set('attendee',attendee); p.set('limit',String(PAGE_SIZE)); p.set('offset',String(offset)); return p.toString();}
-function cardHtml(m){return `<div class="mcard" onclick="openDetail('${esc(m.meet_code)}')">
+function cardHtml(m){return `<div class="mcard" data-code="${esc(m.meet_code)}" onclick="openDetail('${esc(m.meet_code)}')">
 <div class="mcard-top"><span class="mcard-title">${esc(m.title)}</span>${badge(m.status)}</div>
 <div class="mcard-meta"><span>${fmtDate(m.scheduled_start_utc)} &middot; ${fmtTime(m.scheduled_start_utc)}${m.scheduled_end_utc?'-'+fmtTime(m.scheduled_end_utc):''}</span><span>${esc(m.organizer||'')}</span></div>
 </div>`;}
@@ -30,21 +30,25 @@ else{el.insertAdjacentHTML('beforeend',d.meetings.map(cardHtml).join(''));}
 document.getElementById('moreStatus').textContent=feed.offset<feed.total?'Loading more on scroll...':'';
 }finally{feed.busy=false; setTimeout(maybeLoadMore,60);}}
 const sentinel=document.getElementById('moreSentinel');
-function moreAvailable(){return feed.total!==null&&feed.offset<feed.total&&document.getElementById('listView').style.display!=='none';}
+function moreAvailable(){return feed.total!==null&&feed.offset<feed.total&&getComputedStyle(document.getElementById('listView')).display!=='none';}
 // The observer alone misses the case where page 1 does not fill the screen:
 // the sentinel is already intersecting, so no new event ever fires. After
 // every load, keep pulling pages while the sentinel sits near the viewport.
 function maybeLoadMore(){if(!moreAvailable()||feed.busy)return; const rect=sentinel.getBoundingClientRect(); if(rect.top<window.innerHeight+300)loadMeetings(false);}
 new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting))maybeLoadMore();},{rootMargin:'300px'}).observe(sentinel);
 window.addEventListener('scroll',()=>{if(moreAvailable()&&!feed.busy)maybeLoadMore();},{passive:true});
-const VIEWS=['listView','detailView','keysView','passwordView'];
-function showView(id){stopAudio(); for(const v of VIEWS)document.getElementById(v).style.display=v===id?'':'none'; window.scrollTo(0,0);}
+// Desktop: the list column scrolls inside its own container, which does not
+// emit window scroll events.
+document.getElementById('listView').addEventListener('scroll',()=>{if(moreAvailable()&&!feed.busy)maybeLoadMore();},{passive:true});
+const VIEW_NAMES={listView:'list',detailView:'detail',keysView:'keys',passwordView:'password'};
+function showView(id){stopAudio(); document.body.dataset.view=VIEW_NAMES[id]; window.scrollTo(0,0);}
 function showList(){showView('listView');}
 function toggleMenu(event){event.stopPropagation(); const p=document.getElementById('menuPanel'); p.style.display=p.style.display==='none'?'':'none';}
 document.addEventListener('click',e=>{const p=document.getElementById('menuPanel'); if(p.style.display!=='none'&&!e.target.closest('.menu'))p.style.display='none';});
 function openPage(page,push=true){document.getElementById('menuPanel').style.display='none'; if(push)history.pushState({page},'','?page='+page); if(page==='keys'){showView('keysView'); loadKeys();} else if(page==='password'){showView('passwordView');} else showList();}
 function openDetail(code,push=true){if(push)history.pushState({code},'','?meeting='+encodeURIComponent(code)); renderDetail(code);}
 async function renderDetail(code){showView('detailView'); document.getElementById('detailCode').textContent=code; document.getElementById('detail').innerHTML='<div class="empty">Loading...</div>';
+document.querySelectorAll('.mcard').forEach(card=>card.classList.toggle('selected',card.dataset.code===code));
 const r=await fetch('/api/meetings/'+encodeURIComponent(code),{cache:'no-store'}); if(r.status===401){window.location='/login'; return;} const d=await r.json(); if(d.error){document.getElementById('detail').innerHTML=`<div class="empty">${esc(d.error)}</div>`; return;} const m=d.meeting; currentDetail=m;
 const row=(k,v)=>v?`<div><span class="muted">${k}</span><span>${v}</span></div>`:'';
 const block=(title,content)=>content?`<div class="code-block"><div class="code-head"><h3>${title}</h3></div><pre>${esc(content)}</pre></div>`:'';
