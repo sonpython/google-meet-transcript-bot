@@ -28,6 +28,9 @@ header{position:sticky;top:0;z-index:5}
 .split main{max-width:none;margin:0;padding:0}
 body[data-view=list] #detailView,body[data-view=detail] #listView{display:flex}
 #listView{position:sticky;top:72px;max-height:calc(100vh - 90px);overflow-y:auto;padding-right:4px}
+/* the list column is a height-capped flex container: without this, flex
+   shrink squashes the filter panel and cards instead of scrolling */
+#listView>*{flex-shrink:0}
 #detailView .backbar button{display:none}
 .mcard.selected{border-color:#38bdf8;box-shadow:inset 3px 0 0 #38bdf8}
 }
